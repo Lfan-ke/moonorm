@@ -1,0 +1,142 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>moonorm — MoonBit SQL toolkit API</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet"><style>
+:root{
+  --bg:#fbfbfd; --panel:#ffffff; --panel-2:#f6f7fb; --ink:#14181f;
+  --muted:#5b6675; --line:#e8ebf1; --accent:#6d5efc; --accent-soft:#efecff; --out:#0ca678;
+  --code-bg:#f4f5f9; --shadow:0 1px 2px rgba(20,24,31,.04),0 8px 24px -12px rgba(20,24,31,.10);
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0b0e14; --panel:#131722; --panel-2:#0f131c; --ink:#e9edf6; --muted:#96a1b5;
+  --line:#212736; --accent:#9d8bff; --accent-soft:#1c1b3a; --out:#2dd4a7;
+  --code-bg:#161b26; --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 30px -14px rgba(0,0,0,.5);
+}}
+:root[data-theme=light]{--bg:#fbfbfd;--panel:#fff;--panel-2:#f6f7fb;--ink:#14181f;--muted:#5b6675;--line:#e8ebf1;--accent:#6d5efc;--accent-soft:#efecff;--out:#0ca678;--code-bg:#f4f5f9;--shadow:0 1px 2px rgba(20,24,31,.04),0 8px 24px -12px rgba(20,24,31,.10)}
+:root[data-theme=dark]{--bg:#0b0e14;--panel:#131722;--panel-2:#0f131c;--ink:#e9edf6;--muted:#96a1b5;--line:#212736;--accent:#9d8bff;--accent-soft:#1c1b3a;--out:#2dd4a7;--code-bg:#161b26;--shadow:0 1px 2px rgba(0,0,0,.3),0 12px 30px -14px rgba(0,0,0,.5)}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  font-size:15.5px;line-height:1.6;-webkit-font-smoothing:antialiased}
+code,pre,.mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.layout{display:grid;grid-template-columns:264px minmax(0,1fr);max-width:1180px;margin:0 auto}
+.sidebar{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;
+  border-right:1px solid var(--line);padding:1.6rem 1.1rem 2rem;background:var(--panel-2)}
+.brand{display:flex;align-items:center;gap:.55rem;font-family:"IBM Plex Mono";font-weight:600;
+  font-size:1.35rem;letter-spacing:-.01em;color:var(--ink);margin-bottom:.15rem}
+.brand .dot{width:11px;height:11px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+.brand-sub{color:var(--muted);font-size:.8rem;margin:0 0 1.3rem;padding-left:.15rem}
+.side-nav{display:flex;flex-direction:column;gap:.1rem}
+.side-nav a{color:var(--muted);font-size:.9rem;padding:.32rem .6rem;border-radius:8px;
+  font-family:"IBM Plex Mono";display:flex;align-items:center;gap:.4rem;border-left:2px solid transparent}
+.side-nav a .at{color:var(--accent);opacity:.6}
+.side-nav a:hover{background:var(--accent-soft);color:var(--ink);text-decoration:none}
+.side-nav a.active{color:var(--ink);background:var(--accent-soft);border-left-color:var(--accent);font-weight:500}
+.side-nav a.active .at{opacity:1}
+.side-foot{margin-top:1.6rem;padding-top:1.1rem;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:.4rem}
+.side-foot img{height:20px;display:block}
+.theme-btn{margin-top:1rem;background:none;border:1px solid var(--line);color:var(--muted);
+  border-radius:8px;padding:.35rem .6rem;font:inherit;font-size:.82rem;cursor:pointer;width:100%}
+.theme-btn:hover{border-color:var(--accent);color:var(--ink)}
+main{padding:2.6rem 2.4rem 5rem;min-width:0}
+.hero h1{font-family:"IBM Plex Mono";font-weight:600;font-size:2.9rem;letter-spacing:-.02em;margin:0}
+.hero .tag{color:var(--muted);font-size:1.12rem;max-width:62ch;margin:.5rem 0 1.1rem;text-wrap:balance}
+.badges{display:flex;flex-wrap:wrap;gap:.45rem;margin:0 0 1.4rem}
+.badges img{height:21px;display:block}
+.install{display:flex;align-items:center;gap:.6rem;background:var(--panel);border:1px solid var(--line);
+  border-radius:12px;padding:.65rem 1rem;box-shadow:var(--shadow);max-width:420px}
+.install .prompt{color:var(--out);user-select:none;font-weight:600}
+.install code{flex:1;font-size:.95rem}
+.copy{background:none;border:1px solid var(--line);border-radius:7px;color:var(--muted);
+  cursor:pointer;font:inherit;font-size:.72rem;padding:.2rem .5rem}
+.copy:hover{border-color:var(--accent);color:var(--accent)}
+.copy.ok{color:var(--out);border-color:var(--out)}
+.contract{margin:2.1rem 0 .5rem;background:
+   radial-gradient(120% 130% at 100% 0%, var(--accent-soft) 0%, transparent 55%), var(--panel);
+  border:1px solid var(--line);border-radius:16px;padding:1.2rem 1.4rem;box-shadow:var(--shadow)}
+.contract h2{margin:0 0 .6rem;font-size:1.06rem;display:flex;align-items:center;gap:.5rem}
+.contract h2 .spark{color:var(--accent)}
+.contract pre{margin:0;overflow-x:auto;font-size:.92rem;line-height:1.7}
+.contract .k{color:#8b5cf6;font-weight:500}.contract .ty{color:var(--accent)}.contract .op{color:var(--muted)}
+section.pkg{scroll-margin-top:1.2rem;padding-top:2.4rem;margin-top:2rem;border-top:1px solid var(--line)}
+section.pkg > h2{font-family:"IBM Plex Mono";font-size:1.55rem;margin:0 0 .15rem;letter-spacing:-.01em}
+section.pkg > h2 .at{color:var(--accent)}
+.pdesc{color:var(--muted);margin:.15rem 0 1.2rem;max-width:72ch}
+.item{background:var(--panel);border:1px solid var(--line);border-radius:13px;
+  padding:1rem 1.2rem;margin:.85rem 0;box-shadow:var(--shadow);transition:border-color .15s,transform .15s}
+.item:hover{border-color:color-mix(in oklab,var(--accent) 40%,var(--line))}
+.kind{display:inline-block;font-size:.66rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;
+  border-radius:6px;padding:.1rem .45rem;margin-bottom:.55rem;
+  color:var(--accent);background:var(--accent-soft);border:1px solid color-mix(in oklab,var(--accent) 26%,transparent)}
+.item[data-k=struct] .kind{--c:#8b5cf6}.item[data-k=fn] .kind{--c:#0ca678}.item[data-k=let] .kind{--c:#2563eb}
+.item[data-k=enum] .kind{--c:#d6336c}.item[data-k=type] .kind{--c:#0891b2}
+.item .kind{color:var(--c,var(--accent));background:color-mix(in oklab,var(--c,var(--accent)) 13%,transparent);
+  border-color:color-mix(in oklab,var(--c,var(--accent)) 30%,transparent)}
+.sig{font-size:.98rem;margin:0 0 .55rem;overflow-x:auto;white-space:pre;color:var(--ink);padding-bottom:.15rem}
+.sig .k{color:#8b5cf6;font-weight:500}.sig .ty{color:var(--accent)}.sig .op{color:var(--muted)}
+@media (prefers-color-scheme:dark){.sig .k,.contract .k{color:#b794ff}}
+.doc{margin:0;color:var(--ink);max-width:76ch}
+.doc code{background:var(--code-bg);padding:.06rem .35rem;border-radius:5px;font-size:.9em;color:var(--accent)}
+footer{margin-top:3rem;padding-top:1.3rem;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+@media (max-width:820px){
+  .layout{grid-template-columns:1fr}
+  .sidebar{position:static;height:auto;border-right:none;border-bottom:1px solid var(--line)}
+  .side-nav{flex-flow:row wrap}.side-nav a{border-left:none}.side-nav a.active{border-left:none}
+  main{padding:1.8rem 1.2rem 4rem}.hero h1{font-size:2.2rem}
+}
+</style></head><body>
+<div class="layout">
+<aside class="sidebar"><div class="brand"><span class="dot"></span>moonorm</div><p class="brand-sub">MoonBit SQL toolkit — API reference</p><nav class="side-nav">
+<a href="#builder"><span class="at">§</span>Query builder</a>
+</nav><button class="theme-btn" id="theme">◐ toggle theme</button><div class="side-foot"><a href="https://github.com/Lfan-ke/moonorm/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Lfan-ke/moonorm/ci.yml?branch=master&label=CI&logo=github"></a><a href="https://mooncakes.io/docs/Lfan-ke/moonorm"><img alt="mooncakes" src="https://img.shields.io/badge/mooncakes-Lfan--ke%2Fmoonorm-1f6feb"></a></div></aside>
+<main><header class="hero"><h1>moonorm</h1><p class="tag">An ORM / SQL toolkit for MoonBit &#8212; a parameterized, injection-safe query builder, the way SQLAlchemy Core is for Python. Bound values become ? placeholders, never spliced into the SQL string.</p><div class="badges"><a href="https://github.com/Lfan-ke/moonorm/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Lfan-ke/moonorm/ci.yml?branch=master&label=CI&logo=github"></a><img alt="tests" src="https://img.shields.io/badge/tests-6%20passing%20%C3%974%20backends-0ca678"><a href="https://github.com/Lfan-ke/moonorm"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-source-24292f?logo=github"></a><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-6d5efc"></div><div class="install"><span class="prompt">$</span><code>moon add Lfan-ke/moonorm</code><button class="copy" data-copy="moon add Lfan-ke/moonorm">copy</button></div><div class="contract"><h2><span class="spark">&#10038;</span> The contract at a glance</h2><pre><span class="k">let</span> (sql, params) = select(&quot;users&quot;)
+  .column(&quot;id&quot;).eq(&quot;age&quot;, <span class="ty">Int</span>(18)).order_by(&quot;name&quot;, <span class="ty">Asc</span>).limit(10).build()
+// &quot;<span class="ty">SELECT</span> id <span class="ty">FROM</span> users <span class="ty">WHERE</span> age = <span class="op">?</span> <span class="ty">ORDER</span> <span class="ty">BY</span> name <span class="ty">ASC</span> <span class="ty">LIMIT</span> 10&quot;, [<span class="ty">Int</span>(18)]
+
+// bound values are <span class="op">?</span> placeholders + a params list =&gt; injection-safe by construction.</pre></div></header>
+<section class="pkg" id="builder"><h2><span class="at">§</span>Query builder</h2><p class="pdesc">select / insert / update / delete builders with WHERE / ORDER BY / LIMIT, rendering (sql, params) - values are always ? placeholders, never spliced in.</p>
+<div class="item" data-k="enum"><span class="kind">enum</span><pre class="sig"><span class="k">enum</span> <span class="ty">Value</span></pre><p class="doc">A bound SQL value. Values are always carried out-of-band as parameters, never interpolated into the SQL string — that is what makes the builder injection-safe.</p></div>
+<div class="item" data-k="enum"><span class="kind">enum</span><pre class="sig"><span class="k">enum</span> <span class="ty">Order</span></pre><p class="doc">Sort direction for an ORDER BY term.</p></div>
+<div class="item" data-k="struct"><span class="kind">struct</span><pre class="sig"><span class="k">struct</span> <span class="ty">Select</span></pre><p class="doc">A SELECT statement builder.</p></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> select(table : <span class="ty">String</span>) <span class="op">-&gt;</span> <span class="ty">Select</span></pre><p class="doc">Start a SELECT over <code>table</code>.</p></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Select</span>::column(self : <span class="ty">Select</span>, col : <span class="ty">String</span>) <span class="op">-&gt;</span> <span class="ty">Select</span></pre><p class="doc">Add a projected column (no columns selects <code>*</code>).</p></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Select</span>::where_( self : <span class="ty">Select</span>, col : <span class="ty">String</span>, op : <span class="ty">String</span>, val : <span class="ty">Value</span>) <span class="op">-&gt;</span> <span class="ty">Select</span></pre><p class="doc">Add a <code>col op ?</code> predicate (ANDed with the rest).</p></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Select</span>::eq(self : <span class="ty">Select</span>, col : <span class="ty">String</span>, val : <span class="ty">Value</span>) <span class="op">-&gt;</span> <span class="ty">Select</span></pre><p class="doc">Shorthand for <code>where_(col, &quot;=&quot;, val)</code>.</p></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Select</span>::order_by(self : <span class="ty">Select</span>, col : <span class="ty">String</span>, ord : <span class="ty">Order</span>) <span class="op">-&gt;</span> <span class="ty">Select</span></pre></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Select</span>::limit(self : <span class="ty">Select</span>, n : <span class="ty">Int</span>) <span class="op">-&gt;</span> <span class="ty">Select</span></pre></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Select</span>::offset(self : <span class="ty">Select</span>, n : <span class="ty">Int</span>) <span class="op">-&gt;</span> <span class="ty">Select</span></pre></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Select</span>::build(self : <span class="ty">Select</span>) <span class="op">-&gt;</span> (<span class="ty">String</span>, <span class="ty">Array</span>[<span class="ty">Value</span>])</pre><p class="doc">Render to <code>(sql, params)</code>, with <code>?</code> placeholders for every bound value.</p></div>
+<div class="item" data-k="struct"><span class="kind">struct</span><pre class="sig"><span class="k">struct</span> <span class="ty">Insert</span></pre><p class="doc">An INSERT statement builder.</p></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> insert(table : <span class="ty">String</span>) <span class="op">-&gt;</span> <span class="ty">Insert</span></pre></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Insert</span>::set(self : <span class="ty">Insert</span>, col : <span class="ty">String</span>, val : <span class="ty">Value</span>) <span class="op">-&gt;</span> <span class="ty">Insert</span></pre><p class="doc">Set a column to a value.</p></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Insert</span>::build(self : <span class="ty">Insert</span>) <span class="op">-&gt;</span> (<span class="ty">String</span>, <span class="ty">Array</span>[<span class="ty">Value</span>])</pre></div>
+<div class="item" data-k="struct"><span class="kind">struct</span><pre class="sig"><span class="k">struct</span> <span class="ty">Update</span></pre><p class="doc">An UPDATE statement builder.</p></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> update(table : <span class="ty">String</span>) <span class="op">-&gt;</span> <span class="ty">Update</span></pre></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Update</span>::set(self : <span class="ty">Update</span>, col : <span class="ty">String</span>, val : <span class="ty">Value</span>) <span class="op">-&gt;</span> <span class="ty">Update</span></pre></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Update</span>::where_( self : <span class="ty">Update</span>, col : <span class="ty">String</span>, op : <span class="ty">String</span>, val : <span class="ty">Value</span>) <span class="op">-&gt;</span> <span class="ty">Update</span></pre></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Update</span>::build(self : <span class="ty">Update</span>) <span class="op">-&gt;</span> (<span class="ty">String</span>, <span class="ty">Array</span>[<span class="ty">Value</span>])</pre></div>
+<div class="item" data-k="struct"><span class="kind">struct</span><pre class="sig"><span class="k">struct</span> <span class="ty">Delete</span></pre><p class="doc">A DELETE statement builder.</p></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> delete(table : <span class="ty">String</span>) <span class="op">-&gt;</span> <span class="ty">Delete</span></pre></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Delete</span>::where_( self : <span class="ty">Delete</span>, col : <span class="ty">String</span>, op : <span class="ty">String</span>, val : <span class="ty">Value</span>) <span class="op">-&gt;</span> <span class="ty">Delete</span></pre></div>
+<div class="item" data-k="fn"><span class="kind">fn</span><pre class="sig"><span class="k">fn</span> <span class="ty">Delete</span>::build(self : <span class="ty">Delete</span>) <span class="op">-&gt;</span> (<span class="ty">String</span>, <span class="ty">Array</span>[<span class="ty">Value</span>])</pre></div>
+</section>
+<footer>Generated from source <code>///</code> doc-comments · <a href="https://mooncakes.io/docs/Lfan-ke/moonorm">mooncakes</a> · <a href="https://github.com/Lfan-ke/moonorm">GitHub</a> · Apache-2.0 &#169; Leo Cheng</footer>
+</main></div><script>
+document.addEventListener("DOMContentLoaded",()=>{
+  document.querySelectorAll("[data-copy]").forEach(btn=>btn.addEventListener("click",()=>{
+    navigator.clipboard.writeText(btn.getAttribute("data-copy")).then(()=>{
+      const t=btn.textContent;btn.textContent="copied";btn.classList.add("ok");
+      setTimeout(()=>{btn.textContent=t;btn.classList.remove("ok");},1100);});}));
+  const links=[...document.querySelectorAll(".side-nav a")];
+  const map=Object.fromEntries(links.map(a=>[a.getAttribute("href").slice(1),a]));
+  const spy=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){
+    links.forEach(a=>a.classList.remove("active"));const a=map[e.target.id];if(a)a.classList.add("active");}});},
+    {rootMargin:"-10% 0px -80% 0px"});
+  document.querySelectorAll("section.pkg").forEach(s=>spy.observe(s));
+  const tb=document.getElementById("theme");if(tb)tb.addEventListener("click",()=>{
+    const cur=document.documentElement.getAttribute("data-theme")
+      ||(matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light");
+    document.documentElement.setAttribute("data-theme",cur==="dark"?"light":"dark");});
+});
+</script></body></html>
