@@ -31,6 +31,15 @@ struct Cond {
 }
 
 ///|
+/// A single JOIN clause: its keyword (`JOIN` / `LEFT JOIN`), the joined table,
+/// and the raw `ON` predicate (an identifier-level expression, never a bound value).
+struct JoinClause {
+  kind : String
+  table : String
+  on : String
+}
+
+///|
 fn join(parts : Array[String], sep : String) -> String {
   let mut out = ""
   for i = 0; i < parts.length(); i = i + 1 {
@@ -49,7 +58,10 @@ fn join(parts : Array[String], sep : String) -> String {
 pub struct Select {
   table : String
   cols : Array[String]
+  joins : Array[JoinClause]
   conds : Array[Cond]
+  groups : Array[String]
+  havings : Array[Cond]
   orders : Array[(String, Order)]
   mut limit_ : Int?
   mut offset_ : Int?
@@ -58,13 +70,75 @@ pub struct Select {
 ///|
 /// Start a SELECT over `table`.
 pub fn select(table : String) -> Select {
-  { table, cols: [], conds: [], orders: [], limit_: None, offset_: None }
+  {
+    table,
+    cols: [],
+    joins: [],
+    conds: [],
+    groups: [],
+    havings: [],
+    orders: [],
+    limit_: None,
+    offset_: None,
+  }
 }
 
 ///|
 /// Add a projected column (no columns selects `*`).
 pub fn Select::column(self : Select, col : String) -> Select {
   self.cols.push(col)
+  self
+}
+
+///|
+/// Add a raw column expression (e.g. an aggregate like `"SUM(price)"` or a
+/// qualified `"users.id"`). Identical machinery to `column`; named for intent so
+/// call sites read as "this is an expression, not a plain column name".
+pub fn Select::raw(self : Select, expr : String) -> Select {
+  self.cols.push(expr)
+  self
+}
+
+///|
+/// Project `COUNT(*)` — the most common aggregate. Sugar for `raw("COUNT(*)")`.
+pub fn Select::count(self : Select) -> Select {
+  self.cols.push("COUNT(*)")
+  self
+}
+
+///|
+/// Add an inner `JOIN table ON <on>`. The `on` predicate is rendered verbatim
+/// (it references columns, not bound values), so pass only trusted identifiers.
+pub fn Select::join(self : Select, table : String, on : String) -> Select {
+  self.joins.push({ kind: "JOIN", table, on })
+  self
+}
+
+///|
+/// Add a `LEFT JOIN table ON <on>`. See `join` for the `on` contract.
+pub fn Select::left_join(self : Select, table : String, on : String) -> Select {
+  self.joins.push({ kind: "LEFT JOIN", table, on })
+  self
+}
+
+///|
+/// Add a `GROUP BY` column (repeatable; columns are emitted in call order).
+pub fn Select::group_by(self : Select, col : String) -> Select {
+  self.groups.push(col)
+  self
+}
+
+///|
+/// Add a `col op ?` predicate to the `HAVING` clause (ANDed with the rest). The
+/// value is bound as a `?` placeholder exactly like `where_`, so aggregate
+/// filters stay injection-safe.
+pub fn Select::having(
+  self : Select,
+  col : String,
+  op : String,
+  val : Value,
+) -> Select {
+  self.havings.push({ col, op, val })
   self
 }
 
@@ -112,6 +186,9 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
     (if self.cols.length() == 0 { "*" } else { join(self.cols, ", ") }) +
     " FROM " +
     self.table
+  for j in self.joins {
+    sql = sql + " " + j.kind + " " + j.table + " ON " + j.on
+  }
   if self.conds.length() > 0 {
     let cparts : Array[String] = []
     for c in self.conds {
@@ -119,6 +196,17 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
       params.push(c.val)
     }
     sql = sql + " WHERE " + join(cparts, " AND ")
+  }
+  if self.groups.length() > 0 {
+    sql = sql + " GROUP BY " + join(self.groups, ", ")
+  }
+  if self.havings.length() > 0 {
+    let hparts : Array[String] = []
+    for h in self.havings {
+      hparts.push(h.col + " " + h.op + " ?")
+      params.push(h.val)
+    }
+    sql = sql + " HAVING " + join(hparts, " AND ")
   }
   if self.orders.length() > 0 {
     let oparts : Array[String] = []
@@ -136,6 +224,27 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
     None => ()
   }
   (sql, params)
+}
+
+///|
+/// A lightweight table descriptor: a table `name` plus its known `columns`. It is
+/// the hand-written stand-in for SQLAlchemy's `Table(...)` metadata object —
+/// MoonBit has no reflection, so the schema is declared explicitly rather than
+/// introspected. `select()` turns it into a `Select` with every column projected.
+pub(all) struct Table {
+  name : String
+  columns : Array[String]
+}
+
+///|
+/// Start a SELECT over this table with all of its declared `columns` projected
+/// (an empty `columns` yields `SELECT *`, matching `select(name)`).
+pub fn Table::select(self : Table) -> Select {
+  let s = select(self.name)
+  for c in self.columns {
+    s.cols.push(c)
+  }
+  s
 }
 
 // ---- INSERT ----

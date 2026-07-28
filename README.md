@@ -31,6 +31,19 @@ let (isql, ivals) = @moonorm.insert("users")
 
 @moonorm.update("users").set("age", @moonorm.Int(31)).where_("id", "=", @moonorm.Int(1)).build()
 @moonorm.delete("users").where_("id", "=", @moonorm.Int(9)).build()
+
+// JOIN + GROUP BY + HAVING, with aggregates and a Table descriptor:
+let orders : @moonorm.Table = { name: "orders", columns: [] }
+let (jsql, jparams) = orders.select()
+  .raw("users.name").count()
+  .join("users", "users.id = orders.user_id")
+  .eq("orders.status", @moonorm.Text("paid"))
+  .group_by("users.name")
+  .having("COUNT(*)", ">", @moonorm.Int(3))
+  .build()
+// "SELECT users.name, COUNT(*) FROM orders JOIN users ON users.id = orders.user_id
+//  WHERE orders.status = ? GROUP BY users.name HAVING COUNT(*) > ?"
+// params = [Text("paid"), Int(3)]
 ```
 
 ## Injection safety
@@ -46,7 +59,7 @@ Verified across all backends (`wasm`, `wasm-gc`, `js`, `native`) in CI, 0 warnin
 
 ## Roadmap (transliterating SQLAlchemy)
 
-`select` / `insert` / `update` / `delete` with WHERE / ORDER BY / LIMIT / OFFSET are here. Next, feature-by-feature: joins, group_by / having, subqueries and CTEs; a unified async `Driver` trait with SQLite and Postgres backends and connection pooling; an explicit `Session` (add / get / commit / rollback); `#orm`-annotated models with `moonctl`-generated table metadata and Row↔struct mapping; relationships with explicit `session.load()` eager loading (the faithful equivalent of SQLAlchemy's transparent lazy-load, which MoonBit's lack of attribute interception makes explicit — as Diesel and GORM also do); and Alembic-style migrations.
+`select` / `insert` / `update` / `delete` with WHERE / ORDER BY / LIMIT / OFFSET are here, now joined by inner/left `JOIN`, `GROUP BY` / `HAVING`, aggregate columns (`count()` / `raw()`), and a `Table` descriptor with `Table::select()`. Next, feature-by-feature: subqueries and CTEs; a unified async `Driver` trait with SQLite and Postgres backends and connection pooling; an explicit `Session` (add / get / commit / rollback); `#orm`-annotated models with `moonctl`-generated table metadata and Row↔struct mapping; relationships with explicit `session.load()` eager loading (the faithful equivalent of SQLAlchemy's transparent lazy-load, which MoonBit's lack of attribute interception makes explicit — as Diesel and GORM also do); and Alembic-style migrations.
 
 ## License
 
