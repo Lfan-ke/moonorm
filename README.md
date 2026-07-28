@@ -46,6 +46,55 @@ let (jsql, jparams) = orders.select()
 // params = [Text("paid"), Int(3)]
 ```
 
+## Running against a real database
+
+The builder is only half the story — `moonorm` also **executes**. The `sqlite`
+sub-package is a real native SQLite backend (built on the vendored SQLite
+amalgamation, public domain) that implements the `Driver` trait, so a `Session`
+runs your built statements against an actual database and hands back typed rows.
+
+```moonbit
+// native target only — the SQLite driver links the vendored amalgamation.
+let conn = match @sqlite.SqliteConn::open(":memory:") {
+  Ok(c) => c
+  Err(e) => { println(e.to_string()); return }
+}
+let sess = @moonorm.Session::new(conn)
+sess.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)", []) |> ignore
+
+// INSERT through the builder — values are bound, never spliced.
+sess.add(@moonorm.insert("users").set("name", @moonorm.Text("alice")).set("age", @moonorm.Int(30))) |> ignore
+
+// SELECT through the builder — real rows come back, typed.
+let rows = match sess.fetch(
+  @moonorm.select("users").column("name").column("age").where_("age", ">", @moonorm.Int(18)),
+) {
+  Ok(rs) => rs
+  Err(e) => { println(e.to_string()); return }
+}
+rows[0].text(0)  // Some("alice")
+rows[0].int(1)   // Some(30)
+```
+
+`Session` also has `modify` (UPDATE), `remove` (DELETE), `begin` / `commit` /
+`rollback`, and raw `execute` / `query`. Everything travels as bound parameters,
+so the injection-safety guarantee reaches all the way to the wire.
+
+### Design & boundaries (honest)
+
+- **Explicit, not magic.** SQLAlchemy issues SQL implicitly when you touch a
+  mapped attribute; MoonBit has no attribute interception, so every statement is
+  issued explicitly via `Session` — the same faithful trade Diesel and GORM make.
+- **The driver is native-only.** The SQLite backend is a C FFI over the vendored
+  amalgamation, so it links and runs on the `native` target. The pure query
+  builder and the `Session` / `Driver` / `Row` layer compile on **every** backend
+  (`wasm` / `wasm-gc` / `js` / `native`); only the concrete SQLite `Driver` is
+  gated to `native`. A Postgres wire-protocol backend and a JS `node:sqlite`
+  backend are next on the roadmap.
+- **Real, verified execution.** The integration tests open an actual SQLite
+  database and assert on rows read back; they are mutation-verified (neutering the
+  C step/bind/column path turns them red), so "it runs" is proven, not claimed.
+
 ## Injection safety
 
 ```moonbit
@@ -59,7 +108,7 @@ Verified across all backends (`wasm`, `wasm-gc`, `js`, `native`) in CI, 0 warnin
 
 ## Roadmap (transliterating SQLAlchemy)
 
-`select` / `insert` / `update` / `delete` with WHERE / ORDER BY / LIMIT / OFFSET are here, now joined by inner/left `JOIN`, `GROUP BY` / `HAVING`, aggregate columns (`count()` / `raw()`), and a `Table` descriptor with `Table::select()`. Next, feature-by-feature: subqueries and CTEs; a unified async `Driver` trait with SQLite and Postgres backends and connection pooling; an explicit `Session` (add / get / commit / rollback); `#orm`-annotated models with `moonctl`-generated table metadata and Row↔struct mapping; relationships with explicit `session.load()` eager loading (the faithful equivalent of SQLAlchemy's transparent lazy-load, which MoonBit's lack of attribute interception makes explicit — as Diesel and GORM also do); and Alembic-style migrations.
+`select` / `insert` / `update` / `delete` with WHERE / ORDER BY / LIMIT / OFFSET, inner/left `JOIN`, `GROUP BY` / `HAVING`, aggregate columns (`count()` / `raw()`), and a `Table` descriptor are all here — and now they **execute**: a `Driver` trait with a real native **SQLite** backend and an explicit `Session` (`add` / `fetch` / `modify` / `remove` / `commit` / `rollback`) that runs built statements against a live database. Next, feature-by-feature: a Postgres wire-protocol backend and connection pooling; subqueries and CTEs; `#orm`-annotated models with `moonctl`-generated table metadata and Row↔struct mapping; relationships with explicit `session.load()` eager loading (the faithful equivalent of SQLAlchemy's transparent lazy-load, which MoonBit's lack of attribute interception makes explicit — as Diesel and GORM also do); and Alembic-style migrations.
 
 ## License
 

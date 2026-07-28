@@ -9,6 +9,12 @@ SECTIONS = [
     ("builder", "builder.mbt", "Query builder",
      "select / insert / update / delete builders with WHERE / ORDER BY / LIMIT, "
      "rendering (sql, params) - values are always ? placeholders, never spliced in."),
+    ("session", "session.mbt", "Execution layer",
+     "The backend-agnostic Driver trait, typed Row accessors, and an explicit "
+     "Session that runs built statements against a real database and returns rows."),
+    ("sqlite", "sqlite/sqlite.mbt", "SQLite driver (native)",
+     "A real native SQLite backend over the vendored amalgamation - implements "
+     "Driver, so Session executes actual CREATE / INSERT / SELECT / UPDATE / DELETE."),
 ]
 
 KIND = {"struct": "struct", "enum": "enum", "fn": "fn", "type": "type", "let": "let"}
@@ -204,7 +210,7 @@ def main():
             '? placeholders, never spliced into the SQL string.</p>'
             '<div class="badges">'
             '<a href="https://github.com/Lfan-ke/moonorm/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Lfan-ke/moonorm/ci.yml?branch=master&label=CI&logo=github"></a>'
-            '<img alt="tests" src="https://img.shields.io/badge/tests-6%20passing%20%C3%974%20backends-0ca678">'
+            '<img alt="tests" src="https://img.shields.io/badge/tests-15%20passing%20%2B%20real%20SQLite-0ca678">'
             '<a href="https://github.com/Lfan-ke/moonorm"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-source-24292f?logo=github"></a>'
             '<img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-6d5efc"></div>'
             '<div class="install"><span class="prompt">$</span><code>moon add Lfan-ke/moonorm</code>'

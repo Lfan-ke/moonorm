@@ -1,0 +1,10 @@
+supported_targets = "native"
+
+import {
+  "Lfan-ke/moonorm",
+  "moonbitlang/core/encoding/utf8",
+}
+
+options(
+  "native-stub": [ "stub.c", "sqlite3.c" ],
+)
