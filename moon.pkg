@@ -1,5 +1,11 @@
 // moonorm (<- SQLAlchemy / SQLModel). The parameterized query builder — the heart
-// of SQLAlchemy Core — plus the execution layer: it emits SQL with `?` placeholders
-// and a params list, so values are never interpolated into the string (injection-safe
-// by construction). This root package is pure and compiles on every backend; the
-// real SQLite `Driver` lives in the native-only `sqlite/` sub-package.
+// of SQLAlchemy Core — plus the model/session execution layer. It emits SQL with `?`
+// placeholders and a params list, so values are never interpolated into the string
+// (injection-safe by construction). moonorm owns no driver contract: it is written
+// entirely against the `@moondb` seam and runs on any `@moondb.Driver`. This whole
+// package is pure MoonBit with zero C and compiles on every backend; a concrete
+// backend (moon-sqlite, moon-postgres, …) is a separate package the caller supplies.
+
+import {
+  "Lfan-ke/moondb",
+}

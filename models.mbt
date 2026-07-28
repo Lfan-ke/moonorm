@@ -96,19 +96,22 @@ pub fn Column::ddl(self : Column) -> String {
 pub struct Model[T] {
   table : String
   columns : Array[Column]
-  from_row : (Row) -> T
+  from_row : (@moondb.Row) -> T raise @moondb.DbError
   to_columns : (T) -> Array[(String, Value)]
 }
 
 ///|
-/// Define a `Model[T]`. `from_row` should read the record's fields off the `Row`
-/// (via `Row::text` / `Row::int` / `Row::by_name` …); `to_columns` should list the
-/// column/value pairs to persist (typically every column except an autoincrement
-/// primary key).
+/// Define a `Model[T]`. `from_row` should read the record's fields off the
+/// `@moondb.Row` (via `Row::text` / `Row::int` / `Row::by_name` …) — those accessors
+/// raise `@moondb.DbError` on a type or index mismatch, so `from_row` raises too and
+/// a decode bug surfaces at the call site. `to_columns` should list the column/value
+/// pairs to persist (typically every column except an autoincrement primary key).
+/// Write the closures in arrow form so the `raise` effect is inferred, e.g.
+/// `(r) => \{ id: r.int(0), name: r.text(1) \}`.
 pub fn[T] Model::new(
   table : String,
   columns : Array[Column],
-  from_row : (Row) -> T,
+  from_row : (@moondb.Row) -> T raise @moondb.DbError,
   to_columns : (T) -> Array[(String, Value)],
 ) -> Model[T] {
   { table, columns, from_row, to_columns }
@@ -177,13 +180,19 @@ pub fn[T] Model::insert_of(self : Model[T], record : T) -> Insert {
 
 ///|
 /// Decode a single fetched `Row` into a record via the model's `from_row`.
-pub fn[T] Model::map_row(self : Model[T], row : Row) -> T {
+pub fn[T] Model::map_row(
+  self : Model[T],
+  row : @moondb.Row,
+) -> T raise @moondb.DbError {
   (self.from_row)(row)
 }
 
 ///|
 /// Decode a whole result set into records, preserving row order.
-pub fn[T] Model::map_rows(self : Model[T], rows : Array[Row]) -> Array[T] {
+pub fn[T] Model::map_rows(
+  self : Model[T],
+  rows : Array[@moondb.Row],
+) -> Array[T] raise @moondb.DbError {
   let out : Array[T] = []
   for r in rows {
     out.push((self.from_row)(r))

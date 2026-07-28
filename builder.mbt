@@ -1,18 +1,10 @@
 ///|
-/// A bound SQL value. Values are always carried out-of-band as parameters, never
+/// The bound-value type is moondb's dialect-neutral [`@moondb.Value`], re-exported
+/// here so the builder's public surface reads as `Value` (and its constructors —
+/// `Int`, `Text`, `Null`, …) stay unqualified) while the actual type is the one every
+/// moondb driver speaks. Values are always carried out-of-band as parameters, never
 /// interpolated into the SQL string — that is what makes the builder injection-safe.
-///
-/// The variants mirror SQLite's dynamic storage classes: `Int`/`Int64` map to
-/// INTEGER, `Double` to REAL, `Text` to TEXT, `Bool` binds as `0`/`1`, and `Null`
-/// to NULL. Rows read back from a driver are decoded into the same type.
-pub(all) enum Value {
-  Int(Int)
-  Int64(Int64)
-  Text(String)
-  Double(Double)
-  Bool(Bool)
-  Null
-} derive(Eq, Debug)
+pub using @moondb {type Value}
 
 ///|
 /// Sort direction for an ORDER BY term.

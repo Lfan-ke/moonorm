@@ -1,6 +1,6 @@
 name = "Lfan-ke/moonorm"
 
-version = "0.4.0"
+version = "0.5.0"
 
 readme = "README.md"
 
@@ -18,3 +18,7 @@ keywords = [
 ]
 
 description = "moonorm — an ORM / SQL toolkit for MoonBit (← SQLAlchemy / SQLModel): a parameterized, injection-safe query builder (select / insert / update / delete)."
+
+import {
+  "Lfan-ke/moondb@0.1.0",
+}
