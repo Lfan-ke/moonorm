@@ -82,6 +82,43 @@ pub fn Session::remove(
 }
 
 ///|
+/// A lost update was detected: an optimistic-lock `UPDATE` matched no row because
+/// the row's version had already moved on since it was read. Raised by
+/// `Session::modify_versioned`.
+pub(all) suberror LostUpdate {
+  LostUpdate(String)
+}
+
+///|
+pub impl Show for LostUpdate with fn output(self : LostUpdate, logger : &Logger) -> Unit {
+  let LostUpdate(m) = self
+  logger.write_string("LostUpdate: " + m)
+}
+
+///|
+/// Run a versioned `UPDATE` under optimistic concurrency control. `stmt` must carry
+/// the version predicate in its `WHERE` (e.g. `where_(version_col, "=",
+/// expected)`) and bump the version column in its `SET`. If the update matches no
+/// row the version has moved on since it was read — a lost update — and this raises
+/// `LostUpdate` instead of silently doing nothing, the faithful equivalent of
+/// SQLAlchemy's `version_id_col` StaleDataError. The whole statement is
+/// parameterised, so both the version guard and the new values stay bound.
+pub fn Session::modify_versioned(
+  self : Session,
+  stmt : Update,
+  what? : String = "row",
+) -> @moondb.ExecResult raise {
+  let (sql, params) = stmt.build()
+  let res = self.driver.execute(sql, params)
+  if res.rows_affected == 0L {
+    raise LostUpdate(
+      what + " was modified concurrently: no row matched the expected version",
+    )
+  }
+  res
+}
+
+///|
 /// Begin an explicit transaction. Delegates to the driver's transaction bracket
 /// (`@moondb.Driver::begin`) rather than emitting `BEGIN` as text, so a driver that
 /// manages transactions out-of-band (or maps them to savepoints) stays in control.

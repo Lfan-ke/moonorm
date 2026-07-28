@@ -12,6 +12,7 @@
 /// opaque `sqlite3*` is carried as its pointer bits in `handle`.
 pub struct SqliteDriver {
   handle : Int64
+  mut closed : Bool
 }
 
 ///|
@@ -22,7 +23,23 @@ pub fn SqliteDriver::open(path : String) -> SqliteDriver raise @moondb.DbError {
   if h == 0L {
     raise @moondb.ConnectError("cannot open database: " + path)
   }
-  { handle: h }
+  { handle: h, closed: false }
+}
+
+///|
+/// Whether `close` has been called. Once closed, every statement raises
+/// `@moondb.Closed` rather than touching the freed `sqlite3*`.
+pub fn SqliteDriver::is_closed(self : SqliteDriver) -> Bool {
+  self.closed
+}
+
+///|
+/// Raise `Closed` if the connection has been closed. Guarding here keeps a
+/// use-after-close a clean `DbError` instead of a dangling-pointer call into C.
+fn SqliteDriver::ensure_open(self : SqliteDriver) -> Unit raise @moondb.DbError {
+  if self.closed {
+    raise @moondb.Closed
+  }
 }
 
 ///|
@@ -33,6 +50,7 @@ pub fn SqliteDriver::exec_script(
   self : SqliteDriver,
   script : String,
 ) -> Unit raise @moondb.DbError {
+  self.ensure_open()
   let rc = ffi_exec(self.handle, @utf8.encode(script))
   if rc != 0 {
     raise @moondb.QueryError(bytes_to_str(ffi_errmsg(self.handle)))
@@ -72,6 +90,7 @@ fn SqliteDriver::prepare_bound(
   sql : String,
   params : Array[@moondb.Value],
 ) -> Int64 raise @moondb.DbError {
+  self.ensure_open()
   let st = ffi_prepare(self.handle, @utf8.encode(sql))
   if st == 0L {
     raise @moondb.QueryError(bytes_to_str(ffi_errmsg(self.handle)))
@@ -148,6 +167,7 @@ fn SqliteDriver::run_txn(
   self : SqliteDriver,
   kw : String,
 ) -> Unit raise @moondb.DbError {
+  self.ensure_open()
   let rc = ffi_exec(self.handle, @utf8.encode(kw))
   if rc != 0 {
     raise @moondb.QueryError(bytes_to_str(ffi_errmsg(self.handle)))
@@ -156,5 +176,10 @@ fn SqliteDriver::run_txn(
 
 ///|
 pub impl @moondb.Driver for SqliteDriver with fn close(self) {
-  ffi_close(self.handle) |> ignore
+  // Best-effort and idempotent (Go's io.Closer discipline): free the sqlite3*
+  // exactly once, then mark closed so later statements raise Closed.
+  if !self.closed {
+    ffi_close(self.handle) |> ignore
+    self.closed = true
+  }
 }

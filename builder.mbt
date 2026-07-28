@@ -52,12 +52,35 @@ fn join(parts : Array[String], sep : String) -> String {
 // ---- SELECT ----
 
 ///|
+/// A `col IN (subquery)` / `col NOT IN (subquery)` predicate: the subquery is a
+/// full `Select`, whose bound parameters splice in at the point the predicate is
+/// rendered. Keeping subquery predicates separate from the scalar `conds` lets the
+/// builder concatenate the two params streams in the exact order the SQL text emits
+/// them (scalar predicates first, then subqueries), so binding stays index-aligned.
+struct SubCond {
+  col : String
+  op : String
+  sub : Select
+}
+
+///|
+/// A common table expression: `name AS (subquery)`. CTEs render in a single leading
+/// `WITH` clause and their bound parameters come first in the final params list,
+/// matching their leading position in the SQL text.
+struct Cte {
+  name : String
+  sub : Select
+}
+
+///|
 /// A SELECT statement builder.
 pub struct Select {
   table : String
+  ctes : Array[Cte]
   cols : Array[String]
   joins : Array[JoinClause]
   conds : Array[Cond]
+  sub_conds : Array[SubCond]
   groups : Array[String]
   havings : Array[Cond]
   orders : Array[(String, Order)]
@@ -70,9 +93,11 @@ pub struct Select {
 pub fn select(table : String) -> Select {
   {
     table,
+    ctes: [],
     cols: [],
     joins: [],
     conds: [],
+    sub_conds: [],
     groups: [],
     havings: [],
     orders: [],
@@ -159,6 +184,37 @@ pub fn Select::eq(self : Select, col : String, val : Value) -> Select {
 }
 
 ///|
+/// Attach a common table expression: `WITH name AS (sub)`. Repeatable — several
+/// CTEs render comma-separated in one leading `WITH`. The subquery is parameterised
+/// like any other statement; its bound values lead the final params list because
+/// the `WITH` clause leads the SQL text. `name` is a trusted identifier declared in
+/// code, never a bound value.
+pub fn Select::with_cte(self : Select, name : String, sub : Select) -> Select {
+  self.ctes.push({ name, sub })
+  self
+}
+
+///|
+/// Add a `col IN (subquery)` predicate (ANDed with the rest). The subquery's bound
+/// values splice in at the predicate's position, so a correlated or filtering
+/// subquery stays injection-safe exactly like a scalar `where_`.
+pub fn Select::where_in(self : Select, col : String, sub : Select) -> Select {
+  self.sub_conds.push({ col, op: "IN", sub })
+  self
+}
+
+///|
+/// Add a `col NOT IN (subquery)` predicate (ANDed with the rest). See `where_in`.
+pub fn Select::where_not_in(
+  self : Select,
+  col : String,
+  sub : Select,
+) -> Select {
+  self.sub_conds.push({ col, op: "NOT IN", sub })
+  self
+}
+
+///|
 pub fn Select::order_by(self : Select, col : String, ord : Order) -> Select {
   self.orders.push((col, ord))
   self
@@ -177,21 +233,44 @@ pub fn Select::offset(self : Select, n : Int) -> Select {
 }
 
 ///|
-/// Render to `(sql, params)`, with `?` placeholders for every bound value.
+/// Render to `(sql, params)`, with `?` placeholders for every bound value. Bound
+/// values appear in the params list in the same left-to-right order they occur in
+/// the SQL text: CTE subqueries first (the leading `WITH`), then the `WHERE` scalar
+/// predicates, then the `WHERE` subquery predicates, then `HAVING`.
 pub fn Select::build(self : Select) -> (String, Array[Value]) {
   let params : Array[Value] = []
-  let mut sql = "SELECT " +
+  let mut sql = ""
+  if self.ctes.length() > 0 {
+    let cte_parts : Array[String] = []
+    for cte in self.ctes {
+      let (sub_sql, sub_params) = cte.sub.build()
+      cte_parts.push(cte.name + " AS (" + sub_sql + ")")
+      for p in sub_params {
+        params.push(p)
+      }
+    }
+    sql = "WITH " + join(cte_parts, ", ") + " "
+  }
+  sql = sql +
+    "SELECT " +
     (if self.cols.length() == 0 { "*" } else { join(self.cols, ", ") }) +
     " FROM " +
     self.table
   for j in self.joins {
     sql = sql + " " + j.kind + " " + j.table + " ON " + j.on
   }
-  if self.conds.length() > 0 {
+  if self.conds.length() > 0 || self.sub_conds.length() > 0 {
     let cparts : Array[String] = []
     for c in self.conds {
       cparts.push(c.col + " " + c.op + " ?")
       params.push(c.val)
+    }
+    for sc in self.sub_conds {
+      let (sub_sql, sub_params) = sc.sub.build()
+      cparts.push(sc.col + " " + sc.op + " (" + sub_sql + ")")
+      for p in sub_params {
+        params.push(p)
+      }
     }
     sql = sql + " WHERE " + join(cparts, " AND ")
   }

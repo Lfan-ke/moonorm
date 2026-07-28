@@ -91,6 +91,121 @@ async test "integration: transactions commit and roll back" {
 }
 
 ///|
+async fn pg_open() -> PgConn {
+  PgConn::connect(
+    env_or("PGHOST", "127.0.0.1"),
+    env_port(),
+    env_or("PGUSER", "postgres"),
+    env_or("PGPASSWORD", "postgres"),
+    env_or("PGDATABASE", "test"),
+  )
+}
+
+///|
+async test "integration: every Value type round-trips through the wire" {
+  guard @env.get_env_var("MOON_PG_TEST") is Some(_) else { return }
+  let conn = pg_open()
+  conn.execute("DROP TABLE IF EXISTS moon_pg_types", []) |> ignore
+  conn.execute(
+    "CREATE TABLE moon_pg_types (b bool, i int, big bigint, d float8, t text, raw bytea)",
+    [],
+  )
+  |> ignore
+  let blob = b"\x00\x01\x7f\x80\xfe\xff"
+  conn.execute("INSERT INTO moon_pg_types VALUES (?, ?, ?, ?, ?, ?)", [
+    @moondb.Bool(true),
+    @moondb.Int(-2147483648),
+    @moondb.Int64(9223372036854775807L),
+    @moondb.Double(-2.5),
+    @moondb.Text(""),
+    @moondb.Blob(blob),
+  ])
+  |> ignore
+  // A NULL in every column must come back as SQL NULL, not a zero value.
+  conn.execute("INSERT INTO moon_pg_types VALUES (?, ?, ?, ?, ?, ?)", [
+    @moondb.Null,
+    @moondb.Null,
+    @moondb.Null,
+    @moondb.Null,
+    @moondb.Null,
+    @moondb.Null,
+  ])
+  |> ignore
+  let rows = conn.query(
+    "SELECT b, i, big, d, t, raw FROM moon_pg_types ORDER BY i NULLS LAST",
+    [],
+  )
+  assert_eq(rows.length(), 2)
+  assert_eq(rows[0].bool_by("b"), true)
+  assert_eq(rows[0].int_by("i"), -2147483648)
+  assert_eq(rows[0].int64_by("big"), 9223372036854775807L)
+  assert_eq(rows[0].double_by("d"), -2.5)
+  assert_eq(rows[0].text_by("t"), "")
+  assert_eq(rows[0].blob_by("raw"), blob)
+  assert_eq(rows[1].is_null_by("b"), true)
+  assert_eq(rows[1].is_null_by("raw"), true)
+  conn.close()
+}
+
+///|
+async test "integration: SAVEPOINT rolls back inner work while the outer tx commits" {
+  guard @env.get_env_var("MOON_PG_TEST") is Some(_) else { return }
+  let conn = pg_open()
+  conn.execute("DROP TABLE IF EXISTS moon_pg_sp", []) |> ignore
+  conn.execute("CREATE TABLE moon_pg_sp (n int)", []) |> ignore
+  conn.begin()
+  conn.execute("INSERT INTO moon_pg_sp VALUES (?)", [@moondb.Int(1)]) |> ignore
+  conn.execute("SAVEPOINT sp1", []) |> ignore
+  conn.execute("INSERT INTO moon_pg_sp VALUES (?)", [@moondb.Int(2)]) |> ignore
+  conn.execute("ROLLBACK TO SAVEPOINT sp1", []) |> ignore
+  conn.commit()
+  let rows = conn.query("SELECT n FROM moon_pg_sp ORDER BY n", [])
+  assert_eq(rows.length(), 1)
+  assert_eq(rows[0].int(0), 1)
+  conn.close()
+}
+
+///|
+async test "integration: the server error surface — syntax, missing table, unique" {
+  guard @env.get_env_var("MOON_PG_TEST") is Some(_) else { return }
+  let conn = pg_open()
+  // A syntax error surfaces as a QueryError, not a silent success.
+  let syntax = try {
+    conn.query("SELCT 1", []) |> ignore
+    false
+  } catch {
+    @moondb.QueryError(_) => true
+    _ => false
+  }
+  assert_eq(syntax, true)
+  // A missing table errors as QueryError. read_results already drains to
+  // ReadyForQuery on error, so the connection stays usable for the next statement.
+  let missing = try {
+    conn.query("SELECT * FROM moon_pg_absent", []) |> ignore
+    false
+  } catch {
+    @moondb.QueryError(_) => true
+    _ => false
+  }
+  assert_eq(missing, true)
+  // A UNIQUE violation on the duplicate insert errors.
+  conn.execute("DROP TABLE IF EXISTS moon_pg_uq", []) |> ignore
+  conn.execute("CREATE TABLE moon_pg_uq (k text UNIQUE)", []) |> ignore
+  conn.execute("INSERT INTO moon_pg_uq VALUES (?)", [@moondb.Text("x")])
+  |> ignore
+  let dup = try {
+    conn.execute("INSERT INTO moon_pg_uq VALUES (?)", [@moondb.Text("x")])
+    |> ignore
+    false
+  } catch {
+    @moondb.QueryError(_) => true
+    _ => false
+  }
+  assert_eq(dup, true)
+  conn.close()
+}
+
+///|
 test "PgDriver conforms to @moondb.Driver; sync I/O raises (async wall)" {
   let d = PgDriver::new(host="127.0.0.1", user="postgres", database="test")
   let drv : &@moondb.Driver = d

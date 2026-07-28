@@ -8,17 +8,26 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SECTIONS = [
     ("builder", "builder.mbt", "Query builder",
      "select / insert / update / delete builders with WHERE / ORDER BY / LIMIT, "
-     "rendering (sql, params) - values are always ? placeholders, never spliced in."),
+     "JOIN, GROUP BY / HAVING, WITH common table expressions, and IN (subquery) "
+     "predicates. Every builder renders (sql, params) - values are always ? "
+     "placeholders, never spliced in, and subquery/CTE params keep SQL text order."),
     ("session", "session.mbt", "Execution layer",
      "An explicit Session over any @moondb.Driver: it runs built statements and "
-     "returns typed @moondb.Row values, with SAVEPOINT-based nested transactions and "
-     "eager relationship loading. moonorm owns no driver contract - the seam is "
-     "@moondb, so a Session drives moon-sqlite, a Postgres backend, or MockDriver."),
+     "returns typed @moondb.Row values, with SAVEPOINT-based nested transactions, "
+     "optimistic-locked updates (modify_versioned raises LostUpdate on a stale "
+     "version), and eager relationship loading. moonorm owns no driver contract - "
+     "the seam is @moondb, so a Session drives moon-sqlite, a Postgres backend, or "
+     "MockDriver."),
     ("models", "models.mbt", "Models & relationships",
      "The declarative model layer: typed columns, a Model[T] Row<->record mapper, "
      "CREATE TABLE DDL, and foreign-key 1:N / N:1 relationships loaded explicitly "
      "via session.load / session.load_one (the faithful attribute-interception "
      "equivalent, as Diesel and GORM also make explicit)."),
+    ("migrations", "migrations.mbt", "Schema migrations",
+     "Versioned up/down migrations tracked in a schema_migrations table: a Migrator "
+     "applies pending versions ascending, is idempotent on re-run, rolls back to a "
+     "target version descending, and reports the current version. The Alembic / "
+     "diesel-migrations counterpart, run over any @moondb.Driver."),
 ]
 
 KIND = {"struct": "struct", "enum": "enum", "fn": "fn", "type": "type", "let": "let"}

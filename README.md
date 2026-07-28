@@ -155,6 +155,59 @@ injection-safe like every other query.
   end in moon-sqlite's native integration tests, which open an actual SQLite database
   and are mutation-verified (neutering the C bind path turns them red).
 
+## Subqueries, CTEs & optimistic locking
+
+The builder does `WITH` common table expressions and `IN (subquery)` predicates, and
+both keep the injection-safety guarantee — a subquery's bound values splice into the
+params list in the exact left-to-right order they appear in the SQL text:
+
+```moonbit
+let big = @moonorm.select("orders").column("user_id").where_("total", ">", @moondb.Int(100))
+let (sql, params) = @moonorm.select("users")
+  .column("id").column("name")
+  .with_cte("big_spenders", big)
+  .where_("active", "=", @moondb.Bool(true))
+  .where_in("id", @moonorm.select("big_spenders").column("user_id"))
+  .build()
+// "WITH big_spenders AS (SELECT user_id FROM orders WHERE total > ?)
+//  SELECT id, name FROM users WHERE active = ? AND id IN (SELECT user_id FROM big_spenders)"
+// params = [Int(100), Bool(true)]   ← CTE value first, then the WHERE value
+```
+
+Optimistic concurrency control mirrors SQLAlchemy's `version_id_col`. Write an UPDATE
+that bumps the version and guards on the one you read; `modify_versioned` runs it and
+raises `LostUpdate` if no row matched — the update was lost to a concurrent writer:
+
+```moonbit
+let stmt = @moonorm.update("account")
+  .set("balance", @moondb.Int(50))
+  .set("version", @moondb.Int(current + 1))
+  .where_("id", "=", @moondb.Int(1))
+  .where_("version", "=", @moondb.Int(current))   // the guard
+sess.modify_versioned(stmt, what="account") |> ignore   // raises LostUpdate on a stale version
+```
+
+## Migrations
+
+Versioned schema migrations, tracked in a `schema_migrations` table — the Alembic /
+diesel-migrations counterpart. A `Migration` carries an integer version plus its `up`
+and `down` statement lists; a `Migrator` applies pending versions in ascending order,
+skips ones already applied (so re-running is a no-op), rolls back to a target version
+in descending order, and reports the current version.
+
+```moonbit
+let migrations : Array[@moonorm.Migration] = [
+  { version: 1, name: "create_users",
+    up: ["CREATE TABLE users (id INTEGER PRIMARY KEY)"], down: ["DROP TABLE users"] },
+  { version: 2, name: "add_email",
+    up: ["ALTER TABLE users ADD COLUMN email TEXT"], down: ["ALTER TABLE users DROP COLUMN email"] },
+]
+let m = @moonorm.Migrator::new()
+m.up(sess, migrations) |> ignore          // applies 1 then 2; returns how many ran
+let _ = m.current_version(sess)            // 2
+m.down_to(sess, migrations, 1) |> ignore   // rolls back 2, leaving 1
+```
+
 ## Injection safety
 
 ```moonbit
@@ -168,7 +221,7 @@ Verified across all backends (`wasm`, `wasm-gc`, `js`, `native`) in CI, 0 warnin
 
 ## Roadmap (transliterating SQLAlchemy)
 
-`select` / `insert` / `update` / `delete` with WHERE / ORDER BY / LIMIT / OFFSET, inner/left `JOIN`, `GROUP BY` / `HAVING`, aggregate columns (`count()` / `raw()`), and a `Table` descriptor are all here — and they **execute** against any `@moondb.Driver` via an explicit `Session` (`add` / `fetch` / `modify` / `remove` / `commit` / `rollback`, plus models and eager-loaded relationships). The native SQLite backend is [`moon-sqlite`](https://github.com/Lfan-ke/moon-sqlite). Next, feature-by-feature: a Postgres wire-protocol backend and connection pooling; subqueries and CTEs; `#orm`-annotated models with `moonctl`-generated table metadata and Row↔struct mapping; and Alembic-style migrations.
+`select` / `insert` / `update` / `delete` with WHERE / ORDER BY / LIMIT / OFFSET, inner/left `JOIN`, `GROUP BY` / `HAVING`, aggregate columns (`count()` / `raw()`), `WITH` CTEs, `IN (subquery)` predicates, and a `Table` descriptor are all here — and they **execute** against any `@moondb.Driver` via an explicit `Session` (`add` / `fetch` / `modify` / `remove` / `commit` / `rollback`, optimistic-locked updates, plus models, eager-loaded relationships, and versioned migrations). The native SQLite backend is [`moon-sqlite`](https://github.com/Lfan-ke/moon-sqlite); Postgres and MySQL/MariaDB backends live in [`moon-postgres`](https://github.com/Lfan-ke/moon-postgres) and [`moon-mysql`](https://github.com/Lfan-ke/moon-mysql). Next, feature-by-feature: connection pooling; `#orm`-annotated models with `moonctl`-generated table metadata and Row↔struct mapping; `RETURNING` / upsert; and window functions.
 
 ## License
 

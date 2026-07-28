@@ -71,3 +71,115 @@ test "integration: real MySQL CREATE/INSERT/SELECT roundtrip" {
   }
   assert_eq(missing, "errored")
 }
+
+///|
+fn mysql_driver() -> MysqlDriver {
+  MysqlDriver::new(
+    host=env_or("MYSQL_HOST", "127.0.0.1"),
+    port=match @env.get_env_var("MYSQL_PORT") {
+      Some(p) => @string.parse_int(p[:]) catch { _ => 3306 }
+      None => 3306
+    },
+    user=env_or("MYSQL_USER", "root"),
+    password=env_or("MYSQL_PASSWORD", "root"),
+    database=env_or("MYSQL_DB", "test"),
+  )
+}
+
+///|
+/// Every Value type through a real round trip: a distinct MySQL column type per
+/// case, then the decoded cell asserted. Breaking the text-row decoder or a
+/// literal renderer turns a row assertion red.
+test "integration: every Value type round-trips through MySQL" {
+  guard @env.get_env_var("MYSQL_TEST") is Some(_) else { return }
+  let db = mysql_driver()
+  let _ = db.execute("DROP TABLE IF EXISTS t_moon_types", [])
+  let _ = db.execute(
+    "CREATE TABLE t_moon_types (id INT PRIMARY KEY, i INT, big BIGINT, d DOUBLE, t TEXT, e TEXT, raw BLOB, n INT)",
+    [],
+  )
+  let blob = b"\x00\x01\x7f\x80\xfe\xff"
+  let _ = db.execute(
+    "INSERT INTO t_moon_types VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    [
+      @moondb.Int(1),
+      @moondb.Int(-2147483648),
+      @moondb.Int64(9223372036854775807L),
+      @moondb.Double(-2.5),
+      @moondb.Text("héllo 世界"),
+      @moondb.Text(""),
+      @moondb.Blob(blob),
+      @moondb.Null,
+    ],
+  )
+  let rows = db.query(
+    "SELECT i, big, d, t, e, raw, n FROM t_moon_types WHERE id = ?",
+    [@moondb.Int(1)],
+  )
+  assert_eq(rows.length(), 1)
+  assert_eq(rows[0].int_by("i"), -2147483648)
+  assert_eq(rows[0].int64_by("big"), 9223372036854775807L)
+  assert_eq(rows[0].double_by("d"), -2.5)
+  assert_eq(rows[0].text_by("t"), "héllo 世界")
+  assert_eq(rows[0].text_by("e"), "")
+  assert_eq(rows[0].blob_by("raw"), blob)
+  assert_eq(rows[0].is_null_by("n"), true)
+}
+
+///|
+/// The server error surface: a syntax error and a duplicate-primary-key
+/// violation must both come back as a DbError, not a silent success.
+test "integration: MySQL error surface — syntax and duplicate key" {
+  guard @env.get_env_var("MYSQL_TEST") is Some(_) else { return }
+  let db = mysql_driver()
+  let syntax = try {
+    let _ = db.query("SELCT 1", [])
+    false
+  } catch {
+    _ => true
+  }
+  assert_eq(syntax, true)
+  let _ = db.execute("DROP TABLE IF EXISTS t_moon_uq", [])
+  let _ = db.execute("CREATE TABLE t_moon_uq (id INT PRIMARY KEY)", [])
+  let _ = db.execute("INSERT INTO t_moon_uq VALUES (?)", [@moondb.Int(1)])
+  let dup = try {
+    let _ = db.execute("INSERT INTO t_moon_uq VALUES (?)", [@moondb.Int(1)])
+    false
+  } catch {
+    _ => true
+  }
+  assert_eq(dup, true)
+}
+
+///|
+/// Real transactions over the async MysqlConn (the sync Driver adapter is
+/// autocommit-only). A rolled-back INSERT must vanish; a committed one persists.
+async test "integration: MySQL transactions commit and roll back" {
+  guard @env.get_env_var("MYSQL_TEST") is Some(_) else { return }
+  let port = match @env.get_env_var("MYSQL_PORT") {
+    Some(p) => @string.parse_int(p[:]) catch { _ => 3306 }
+    None => 3306
+  }
+  let conn = MysqlConn::connect(
+    env_or("MYSQL_HOST", "127.0.0.1"),
+    port,
+    env_or("MYSQL_USER", "root"),
+    env_or("MYSQL_PASSWORD", "root"),
+    env_or("MYSQL_DB", "test"),
+  )
+  let _ = conn.execute("DROP TABLE IF EXISTS t_moon_tx", [])
+  // InnoDB is required for transactional DDL rollback semantics.
+  let _ = conn.execute("CREATE TABLE t_moon_tx (n INT) ENGINE=InnoDB", [])
+  conn.begin()
+  let _ = conn.execute("INSERT INTO t_moon_tx VALUES (?)", [@moondb.Int(1)])
+  conn.rollback()
+  let after_rollback = conn.query("SELECT COUNT(*) FROM t_moon_tx", [])
+  assert_eq(after_rollback[0].int64(0), 0L)
+  conn.begin()
+  let _ = conn.execute("INSERT INTO t_moon_tx VALUES (?)", [@moondb.Int(2)])
+  conn.commit()
+  let after_commit = conn.query("SELECT n FROM t_moon_tx", [])
+  assert_eq(after_commit.length(), 1)
+  assert_eq(after_commit[0].int(0), 2)
+  conn.close()
+}
