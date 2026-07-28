@@ -6,14 +6,25 @@ on:
     branches:
       - master
 
+permissions:
+  contents: read
+
 jobs:
-  build:
-    permissions:
-      contents: read
+  # Pure, target-portable modules: the ORM at the repo root and the moondb
+  # interface under db/. Both compile and test on every backend, on three OSes.
+  pure:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        module:
+          - { dir: ".", name: "moonorm (root)" }
+          - { dir: "db", name: "moondb" }
+    name: ${{ matrix.module.name }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.module.dir }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,6 +54,245 @@ jobs:
         run: moon build --target all
 
       - name: moon test (all backends)
+        run: moon test --target all
+
+      - name: lint (fmt is clean)
+        run: |
+          moon fmt && git diff --exit-code
+
+  # The SQLite driver links the vendored amalgamation, so it is native-only; it
+  # still builds on all three OSes.
+  sqlite:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    name: moon-sqlite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: drivers/sqlite
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: install-unix
+        if: ${{ matrix.os != 'windows-latest' }}
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> $GITHUB_PATH
+
+      - name: install-windows
+        if: ${{ matrix.os == 'windows-latest' }}
+        run: |
+          Set-ExecutionPolicy RemoteSigned -Scope CurrentUser; irm https://cli.moonbitlang.com/install/powershell.ps1 | iex
+          "C:\Users\runneradmin\.moon\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: post install
+        run: |
+          moon version --all
+          moon update
+
+      - name: moon check
+        run: moon check --target native --deny-warn
+
+      - name: moon build
+        run: moon build --target native
+
+      - name: moon test (native, real SQLite)
+        run: moon test --target native
+
+      - name: lint (fmt is clean)
+        run: |
+          moon fmt && git diff --exit-code
+
+  # The PostgreSQL driver's real round trip runs against a live postgres:16.
+  # Service containers are Linux-only, so this job is ubuntu-only.
+  postgres:
+    name: moon-postgres (native, live PostgreSQL)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: drivers/postgres
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: install moon
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> $GITHUB_PATH
+
+      - name: post install
+        run: |
+          moon version --all
+          moon update
+
+      - name: moon check
+        run: moon check --target native --deny-warn
+
+      - name: moon build
+        run: moon build --target native
+
+      - name: moon test (native, against live PostgreSQL)
+        env:
+          MOON_PG_TEST: "1"
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: test
+        run: moon test --target native
+
+      - name: lint (fmt is clean)
+        run: |
+          moon fmt && git diff --exit-code
+
+  # The MySQL driver's integration test runs against a real MySQL 8, pinned to
+  # mysql_native_password so this round's SHA1-scramble handshake authenticates.
+  # GitHub service containers cannot append server flags, so we run the container
+  # directly and health-gate it.
+  mysql:
+    name: moon-mysql (native, live MySQL 8)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: drivers/mysql
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: start mysql 8
+        run: |
+          docker run -d --name mysql8 \
+            -e MYSQL_ROOT_PASSWORD=root \
+            -e MYSQL_ROOT_HOST=% \
+            -e MYSQL_DATABASE=test \
+            -p 3306:3306 \
+            mysql:8.0 --default-authentication-plugin=mysql_native_password
+
+      - name: install moon
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> $GITHUB_PATH
+
+      - name: post install
+        run: |
+          moon version --all
+          moon update
+
+      - name: wait for mysql
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec mysql8 mysqladmin ping -uroot -proot --silent 2>/dev/null; then
+              echo "mysql is up"; break
+            fi
+            echo "waiting for mysql... ($i)"; sleep 2
+          done
+          sleep 3
+          docker exec mysql8 mysql -uroot -proot -e "SELECT VERSION();"
+
+      - name: moon check
+        run: moon check --target all --deny-warn
+
+      - name: moon build
+        run: moon build --target all
+
+      - name: moon test (pure codec on all backends + native round trip to MySQL 8)
+        env:
+          MYSQL_TEST: "1"
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: "root"
+          MYSQL_PASSWORD: "root"
+          MYSQL_DB: "test"
+        run: moon test --target all
+
+      - name: lint (fmt is clean)
+        run: |
+          moon fmt && git diff --exit-code
+
+  # MariaDB speaks the MySQL wire protocol, so the SAME integration suite must be
+  # green against it. We start MariaDB the same container way (no
+  # --default-authentication-plugin: MariaDB has no such flag and already defaults
+  # to mysql_native_password) and run against both a current and an LTS release.
+  mariadb:
+    name: moon-mysql (native, live MariaDB ${{ matrix.mariadb }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mariadb: ["11", "10.11"]
+    defaults:
+      run:
+        working-directory: drivers/mysql
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: start mariadb ${{ matrix.mariadb }}
+        run: |
+          docker run -d --name mariadb \
+            -e MARIADB_ROOT_PASSWORD=root \
+            -e MYSQL_ROOT_HOST=% \
+            -e MARIADB_DATABASE=test \
+            -p 3306:3306 \
+            mariadb:${{ matrix.mariadb }}
+
+      - name: install moon
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> $GITHUB_PATH
+
+      - name: post install
+        run: |
+          moon version --all
+          moon update
+
+      - name: wait for mariadb
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec mariadb mariadb-admin ping -uroot -proot --silent 2>/dev/null; then
+              echo "mariadb is up"; break
+            fi
+            echo "waiting for mariadb... ($i)"; sleep 2
+          done
+          sleep 3
+          # Proof this job talks to MariaDB (version string carries "MariaDB").
+          docker exec mariadb mariadb -uroot -proot -e "SELECT VERSION();"
+
+      - name: moon check
+        run: moon check --target all --deny-warn
+
+      - name: moon build
+        run: moon build --target all
+
+      - name: moon test (same MySQL suite, native round trip to MariaDB)
+        env:
+          MYSQL_TEST: "1"
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: "root"
+          MYSQL_PASSWORD: "root"
+          MYSQL_DB: "test"
         run: moon test --target all
 
       - name: lint (fmt is clean)
