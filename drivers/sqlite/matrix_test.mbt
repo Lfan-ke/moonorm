@@ -137,6 +137,102 @@ test "sqlite matrix: a WITH CTE and an IN-subquery execute with bound params" {
 }
 
 ///|
+test "sqlite matrix: INSERT ... RETURNING hands back the server-assigned id" {
+  let db = open_matrix()
+  db.execute("CREATE TABLE u (id INTEGER PRIMARY KEY, name TEXT)", []) |> ignore
+  // The exact shape moonorm emits for insert(...).returning("id") — run on real
+  // SQLite so the id comes from the engine, not a guess. Two inserts must return
+  // the two distinct rowids the engine assigned.
+  let r1 = db.query("INSERT INTO u (name) VALUES (?) RETURNING id", [
+    @moondb.Text("ann"),
+  ])
+  assert_eq(r1.length(), 1)
+  assert_eq(r1[0].int_by("id"), 1)
+  let r2 = db.query("INSERT INTO u (name) VALUES (?) RETURNING id", [
+    @moondb.Text("bob"),
+  ])
+  assert_eq(r2[0].int_by("id"), 2)
+  // RETURNING * gives every column of the affected row back.
+  let r3 = db.query("INSERT INTO u (name) VALUES (?) RETURNING *", [
+    @moondb.Text("cid"),
+  ])
+  assert_eq(r3[0].int_by("id"), 3)
+  assert_eq(r3[0].text_by("name"), "cid")
+  db.close()
+}
+
+///|
+test "sqlite matrix: upsert ON CONFLICT DO UPDATE overwrites in place" {
+  let db = open_matrix()
+  db.execute("CREATE TABLE kv (k TEXT PRIMARY KEY, v INTEGER)", []) |> ignore
+  // moonorm's insert("kv").set(...).on_conflict(["k"]).do_update_excluded("v").
+  let upsert = fn(k : String, v : Int) -> Unit raise @moondb.DbError {
+    db.execute(
+      "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v",
+      [@moondb.Text(k), @moondb.Int(v)],
+    )
+    |> ignore
+  }
+  upsert("hits", 1)
+  upsert("hits", 5) // same key: updates in place rather than raising UNIQUE
+  let rows = db.query("SELECT k, v FROM kv", [])
+  assert_eq(rows.length(), 1) // still one row, not two
+  assert_eq(rows[0].int_by("v"), 5) // overwritten with the incoming value
+  // A bound DO UPDATE value, and RETURNING the merged row in one round trip.
+  let r = db.query(
+    "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = ? RETURNING v",
+    [@moondb.Text("hits"), @moondb.Int(0), @moondb.Int(99)],
+  )
+  assert_eq(r[0].int_by("v"), 99)
+  db.close()
+}
+
+///|
+test "sqlite matrix: upsert ON CONFLICT DO NOTHING keeps the existing row" {
+  let db = open_matrix()
+  db.execute("CREATE TABLE t (k TEXT PRIMARY KEY, v INTEGER)", []) |> ignore
+  db.execute("INSERT INTO t (k, v) VALUES (?, ?)", [
+    @moondb.Text("a"),
+    @moondb.Int(1),
+  ])
+  |> ignore
+  db.execute("INSERT INTO t (k, v) VALUES (?, ?) ON CONFLICT (k) DO NOTHING", [
+    @moondb.Text("a"),
+    @moondb.Int(2),
+  ])
+  |> ignore
+  let rows = db.query("SELECT v FROM t", [])
+  assert_eq(rows.length(), 1)
+  assert_eq(rows[0].int(0), 1) // untouched by the DO NOTHING insert
+  db.close()
+}
+
+///|
+test "sqlite matrix: window ROW_NUMBER partitions and ranks rows" {
+  let db = open_matrix()
+  db.exec_script(
+    "CREATE TABLE emp (name TEXT, dept TEXT, salary INTEGER);" +
+    "INSERT INTO emp VALUES ('a','eng',100),('b','eng',120),('c','sales',90),('d','sales',90);",
+  )
+  // moonorm's select("emp").window("ROW_NUMBER()", partition_by=["dept"],
+  //   order_by=[("salary", Desc)], as_="rn") — run on real SQLite.
+  let rows = db.query(
+    "SELECT name, ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn FROM emp ORDER BY dept, rn",
+    [],
+  )
+  assert_eq(rows.length(), 4)
+  // eng: b(120) is rank 1, a(100) rank 2.
+  assert_eq(rows[0].text_by("name"), "b")
+  assert_eq(rows[0].int_by("rn"), 1)
+  assert_eq(rows[1].text_by("name"), "a")
+  assert_eq(rows[1].int_by("rn"), 2)
+  // sales: two at rank 1 and 2 by row order.
+  assert_eq(rows[2].int_by("rn"), 1)
+  assert_eq(rows[3].int_by("rn"), 2)
+  db.close()
+}
+
+///|
 fn sqlite_error_kind(f : () -> Unit raise @moondb.DbError) -> String {
   try {
     f()

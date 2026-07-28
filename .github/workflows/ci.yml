@@ -107,6 +107,43 @@ jobs:
         run: |
           moon fmt && git diff --exit-code
 
+  # End-to-end: the published ORM plus the published SQLite driver, driven against
+  # a real SQLite file. It resolves its dependencies from mooncakes, so it runs
+  # after those versions are published. Native-only (moon-sqlite links C).
+  integration:
+    name: moonorm-integration (native, real SQLite, published deps)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integration
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: install moon
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> $GITHUB_PATH
+
+      - name: post install
+        run: |
+          moon version --all
+          moon update
+
+      - name: moon check
+        run: moon check --target native --deny-warn
+
+      - name: moon build
+        run: moon build --target native
+
+      - name: moon test (native, real SQLite, published moonorm + moon-sqlite)
+        run: moon test --target native
+
+      - name: lint (fmt is clean)
+        run: |
+          moon fmt && git diff --exit-code
+
   # The PostgreSQL driver's real round trip runs against a live postgres:16.
   # Service containers are Linux-only, so this job is ubuntu-only.
   postgres:

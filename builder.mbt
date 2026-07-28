@@ -14,6 +14,20 @@ pub(all) enum Order {
 } derive(Eq)
 
 ///|
+/// The SQL dialect a statement renders for. Most of the builder is dialect-neutral
+/// — it emits `?` placeholders and standard clauses that every backend accepts —
+/// but a few constructs genuinely differ: upsert is `ON CONFLICT ... DO UPDATE` on
+/// SQLite and PostgreSQL versus `ON DUPLICATE KEY UPDATE` on MySQL, and `RETURNING`
+/// exists on SQLite and PostgreSQL but not MySQL. `build_for` takes a `Dialect` so
+/// those render correctly; the no-argument `build` renders the SQLite/PostgreSQL
+/// form, which is also what the `?`-placeholder default targets.
+pub(all) enum Dialect {
+  Sqlite
+  Postgres
+  Mysql
+} derive(Eq)
+
+///|
 fn order_sql(o : Order) -> String {
   match o {
     Asc => "ASC"
@@ -126,6 +140,39 @@ pub fn Select::raw(self : Select, expr : String) -> Select {
 /// Project `COUNT(*)` — the most common aggregate. Sugar for `raw("COUNT(*)")`.
 pub fn Select::count(self : Select) -> Select {
   self.cols.push("COUNT(*)")
+  self
+}
+
+///|
+/// Project a window function: `<expr> OVER (PARTITION BY … ORDER BY …)`, optionally
+/// aliased. Window functions compute over a frame of rows without collapsing them
+/// (`ROW_NUMBER()`, `RANK()`, a running `SUM(x)`), so this adds one more projected
+/// column rather than grouping. `expr` is the function call (`"ROW_NUMBER()"`,
+/// `"SUM(amount)"`), `partition_by` splits the rows into independent windows, and
+/// `order_by` ranks within each. All three are identifier-level SQL (they name
+/// columns and functions, never bound values), so they render verbatim like `raw`
+/// and carry no parameters. An empty `partition_by` and `order_by` yields the whole
+/// result as one unordered window, `<expr> OVER ()`.
+pub fn Select::window(
+  self : Select,
+  expr : String,
+  partition_by? : Array[String] = [],
+  order_by? : Array[(String, Order)] = [],
+  as_? : String = "",
+) -> Select {
+  let inner : Array[String] = []
+  if partition_by.length() > 0 {
+    inner.push("PARTITION BY " + join(partition_by, ", "))
+  }
+  if order_by.length() > 0 {
+    let oparts : Array[String] = []
+    for o in order_by {
+      oparts.push(o.0 + " " + order_sql(o.1))
+    }
+    inner.push("ORDER BY " + join(oparts, ", "))
+  }
+  let over = expr + " OVER (" + join(inner, " ") + ")"
+  self.cols.push(if as_ == "" { over } else { over + " AS " + as_ })
   self
 }
 
@@ -327,16 +374,46 @@ pub fn Table::select(self : Table) -> Select {
 // ---- INSERT ----
 
 ///|
-/// An INSERT statement builder.
+/// The right-hand side of one `DO UPDATE` assignment in an upsert. `Bound` sets the
+/// column to a bound value (`col = ?`), just like a normal update. `Excluded` sets
+/// it to the value the conflicting `INSERT` tried to write — `excluded.col` on
+/// SQLite/PostgreSQL, `VALUES(col)` on MySQL — which is how "insert or overwrite
+/// with the new row" is spelled.
+priv enum ConflictValue {
+  Bound(Value)
+  Excluded
+}
+
+///|
+priv struct ConflictAssign {
+  col : String
+  value : ConflictValue
+}
+
+///|
+/// The `ON CONFLICT` / `ON DUPLICATE KEY` clause of an upsert: the conflict-target
+/// columns (the unique key that may collide — used by SQLite/PostgreSQL, implicit on
+/// MySQL), the `DO UPDATE` assignments, and whether the intent is `DO NOTHING`.
+struct Conflict {
+  targets : Array[String]
+  assigns : Array[ConflictAssign]
+  mut do_nothing : Bool
+}
+
+///|
+/// An INSERT statement builder, with optional upsert (`ON CONFLICT`) and
+/// `RETURNING` support.
 pub struct Insert {
   table : String
   cols : Array[String]
   vals : Array[Value]
+  mut conflict : Conflict?
+  returning : Array[String]
 }
 
 ///|
 pub fn insert(table : String) -> Insert {
-  { table, cols: [], vals: [] }
+  { table, cols: [], vals: [], conflict: None, returning: [] }
 }
 
 ///|
@@ -348,19 +425,180 @@ pub fn Insert::set(self : Insert, col : String, val : Value) -> Insert {
 }
 
 ///|
-pub fn Insert::build(self : Insert) -> (String, Array[Value]) {
-  let placeholders : Array[String] = []
-  for _v in self.vals {
-    placeholders.push("?")
+/// Ensure a `Conflict` exists, creating an empty one (no targets, no assigns) if
+/// this is the first upsert call.
+fn Insert::ensure_conflict(self : Insert) -> Conflict {
+  match self.conflict {
+    Some(c) => c
+    None => {
+      let c = { targets: [], assigns: [], do_nothing: false }
+      self.conflict = Some(c)
+      c
+    }
   }
-  let sql = "INSERT INTO " +
+}
+
+///|
+/// Turn this INSERT into an upsert keyed on `targets` — the columns of the unique
+/// index that may collide (SQLAlchemy's `index_elements`). Chain `do_update` /
+/// `do_update_excluded` to say what to change on a collision, or leave it and call
+/// `do_nothing`. SQLite and PostgreSQL name the conflict target explicitly;
+/// `build_for(Mysql)` ignores it (MySQL infers the key), so pass it regardless and
+/// the right dialect uses it.
+pub fn Insert::on_conflict(self : Insert, targets : Array[String]) -> Insert {
+  let c = self.ensure_conflict()
+  for t in targets {
+    c.targets.push(t)
+  }
+  self
+}
+
+///|
+/// On a conflict, set `col` to a bound value (`col = ?`). The value binds as a
+/// parameter after the inserted values, so an upsert stays injection-safe.
+pub fn Insert::do_update(self : Insert, col : String, val : Value) -> Insert {
+  let c = self.ensure_conflict()
+  c.assigns.push({ col, value: Bound(val) })
+  self
+}
+
+///|
+/// On a conflict, set `col` to the value the failed insert tried to write
+/// (`excluded.col` on SQLite/PostgreSQL, `VALUES(col)` on MySQL). This is the
+/// "overwrite with the incoming row" upsert.
+pub fn Insert::do_update_excluded(self : Insert, col : String) -> Insert {
+  let c = self.ensure_conflict()
+  c.assigns.push({ col, value: Excluded })
+  self
+}
+
+///|
+/// On a conflict, keep the existing row and change nothing (`ON CONFLICT DO
+/// NOTHING`). MySQL has no such form, so `build_for(Mysql)` renders a no-op
+/// self-assignment instead.
+pub fn Insert::do_nothing(self : Insert) -> Insert {
+  self.ensure_conflict().do_nothing = true
+  self
+}
+
+///|
+/// Return `col` from each inserted (or upserted) row. On SQLite and PostgreSQL this
+/// appends `RETURNING`, so a caller reads the server-assigned id or a
+/// default/trigger-computed value back in the same round trip instead of a second
+/// SELECT. Repeatable. `build_for(Mysql)` drops it — MySQL has no `RETURNING`.
+pub fn Insert::returning(self : Insert, col : String) -> Insert {
+  self.returning.push(col)
+  self
+}
+
+///|
+/// Return every column of each inserted row (`RETURNING *`). See `returning`.
+pub fn Insert::returning_all(self : Insert) -> Insert {
+  self.returning.push("*")
+  self
+}
+
+///|
+/// Render to `(sql, params)` for the SQLite/PostgreSQL dialect. Equivalent to
+/// `build_for(Sqlite)`; kept as the no-argument default because plain inserts and
+/// the `?`-placeholder convention target this form.
+pub fn Insert::build(self : Insert) -> (String, Array[Value]) {
+  self.build_for(Sqlite)
+}
+
+///|
+/// Render to `(sql, params)` for `dialect`, with `?` placeholders for every bound
+/// value. Bound values appear in params in SQL-text order: the inserted `VALUES`
+/// first, then any `DO UPDATE SET col = ?` values. Upsert renders as `ON CONFLICT`
+/// on SQLite/PostgreSQL and `ON DUPLICATE KEY UPDATE` on MySQL; `RETURNING` is
+/// emitted on SQLite/PostgreSQL and omitted on MySQL.
+pub fn Insert::build_for(
+  self : Insert,
+  dialect : Dialect,
+) -> (String, Array[Value]) {
+  let params : Array[Value] = []
+  let placeholders : Array[String] = []
+  for v in self.vals {
+    placeholders.push("?")
+    params.push(v)
+  }
+  let mut sql = "INSERT INTO " +
     self.table +
     " (" +
     join(self.cols, ", ") +
     ") VALUES (" +
     join(placeholders, ", ") +
     ")"
-  (sql, self.vals)
+  match self.conflict {
+    Some(c) => sql = sql + render_conflict(c, dialect, self.cols, params)
+    None => ()
+  }
+  if self.returning.length() > 0 && dialect != Mysql {
+    sql = sql + " RETURNING " + join(self.returning, ", ")
+  }
+  (sql, params)
+}
+
+///|
+/// Render an upsert clause for `dialect`, pushing any bound update values onto
+/// `params` (they follow the inserted values in SQL-text order). `insert_cols` is
+/// the inserted column list, used only to pick a valid no-op assignment for MySQL's
+/// `DO NOTHING`, which has no native spelling.
+fn render_conflict(
+  c : Conflict,
+  dialect : Dialect,
+  insert_cols : Array[String],
+  params : Array[Value],
+) -> String {
+  match dialect {
+    Mysql => {
+      let sets : Array[String] = []
+      if c.do_nothing && c.assigns.length() == 0 {
+        // MySQL cannot skip the update list; assign a key column to itself.
+        let key = if c.targets.length() > 0 {
+          c.targets[0]
+        } else if insert_cols.length() > 0 {
+          insert_cols[0]
+        } else {
+          "1"
+        }
+        sets.push(key + " = " + key)
+      } else {
+        for a in c.assigns {
+          match a.value {
+            Bound(v) => {
+              sets.push(a.col + " = ?")
+              params.push(v)
+            }
+            Excluded => sets.push(a.col + " = VALUES(" + a.col + ")")
+          }
+        }
+      }
+      " ON DUPLICATE KEY UPDATE " + join(sets, ", ")
+    }
+    _ => {
+      let target = if c.targets.length() > 0 {
+        " (" + join(c.targets, ", ") + ")"
+      } else {
+        ""
+      }
+      if c.do_nothing && c.assigns.length() == 0 {
+        " ON CONFLICT" + target + " DO NOTHING"
+      } else {
+        let sets : Array[String] = []
+        for a in c.assigns {
+          match a.value {
+            Bound(v) => {
+              sets.push(a.col + " = ?")
+              params.push(v)
+            }
+            Excluded => sets.push(a.col + " = excluded." + a.col)
+          }
+        }
+        " ON CONFLICT" + target + " DO UPDATE SET " + join(sets, ", ")
+      }
+    }
+  }
 }
 
 // ---- UPDATE ----

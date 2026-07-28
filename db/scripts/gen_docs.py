@@ -18,6 +18,8 @@ SECTIONS = [
      "The contract a backend implements and a query layer targets — the seam moondb exists to define."),
     ("MockDriver", "mock.mbt",
      "A dependency-free, in-memory reference driver: proof the interface is implementable, and a test double for layers built on it."),
+    ("Pool", "pool.mbt",
+     "A fixed-ceiling connection pool over any driver: reuse idle connections, cap the open count, and close them all."),
 ]
 
 OPENERS = ("enum", "struct", "trait", "suberror")

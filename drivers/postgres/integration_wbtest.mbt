@@ -206,6 +206,54 @@ async test "integration: the server error surface — syntax, missing table, uni
 }
 
 ///|
+async test "integration: upsert ON CONFLICT DO UPDATE and RETURNING round-trip" {
+  guard @env.get_env_var("MOON_PG_TEST") is Some(_) else { return }
+  let conn = pg_open()
+  conn.execute("DROP TABLE IF EXISTS moon_pg_kv", []) |> ignore
+  conn.execute(
+    "CREATE TABLE moon_pg_kv (k text PRIMARY KEY, v int, seen int)",
+    [],
+  )
+  |> ignore
+
+  // INSERT ... RETURNING hands the row back in one round trip. '?' translates to
+  // '$1'..; the shape matches moonorm's insert(...).returning(...).
+  let ins = conn.query(
+    "INSERT INTO moon_pg_kv (k, v, seen) VALUES (?, ?, ?) RETURNING v",
+    [@moondb.Text("hits"), @moondb.Int(1), @moondb.Int(1)],
+  )
+  assert_eq(ins.length(), 1)
+  assert_eq(ins[0].int_by("v"), 1)
+
+  // Upsert on the same key: excluded.v overwrites, a bound value bumps seen, and
+  // RETURNING reads the merged row. This is the on_conflict/do_update path.
+  let up = conn.query(
+    "INSERT INTO moon_pg_kv (k, v, seen) VALUES (?, ?, ?) " +
+    "ON CONFLICT (k) DO UPDATE SET v = excluded.v, seen = ? RETURNING v, seen",
+    [@moondb.Text("hits"), @moondb.Int(9), @moondb.Int(0), @moondb.Int(2)],
+  )
+  assert_eq(up.length(), 1)
+  assert_eq(up[0].int_by("v"), 9) // overwritten with the incoming value
+  assert_eq(up[0].int_by("seen"), 2) // bumped by the bound parameter
+
+  // Still exactly one row: the upsert merged rather than inserting a duplicate.
+  let rows = conn.query("SELECT count(*) FROM moon_pg_kv", [])
+  assert_eq(rows[0].int64(0), 1L)
+
+  // DO NOTHING leaves the existing row untouched.
+  conn.execute(
+    "INSERT INTO moon_pg_kv (k, v, seen) VALUES (?, ?, ?) ON CONFLICT (k) DO NOTHING",
+    [@moondb.Text("hits"), @moondb.Int(-1), @moondb.Int(-1)],
+  )
+  |> ignore
+  let after = conn.query("SELECT v FROM moon_pg_kv WHERE k = ?", [
+    @moondb.Text("hits"),
+  ])
+  assert_eq(after[0].int(0), 9) // unchanged by DO NOTHING
+  conn.close()
+}
+
+///|
 test "PgDriver conforms to @moondb.Driver; sync I/O raises (async wall)" {
   let d = PgDriver::new(host="127.0.0.1", user="postgres", database="test")
   let drv : &@moondb.Driver = d
