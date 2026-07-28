@@ -14,13 +14,19 @@
 
 `moonorm` owns **no driver contract of its own**. It is written entirely against the [`moondb`](https://github.com/Lfan-ke/moondb) interface — the standard database-access seam for MoonBit — so it is **pure MoonBit with zero C** and compiles on every backend (`wasm` / `wasm-gc` / `js` / `native`). A concrete backend is a separate package you supply: the native SQLite driver lives in [`moon-sqlite`](https://github.com/Lfan-ke/moon-sqlite), and a `Session` drives any `@moondb.Driver` — including the dependency-free `@moondb.MockDriver` for tests.
 
+> **Imports.** Bound-value constructors (`Int`, `Text`, `Null`, …) are moondb's —
+> the `Value` type is re-exported by moonorm, but you construct values as `@moondb.Int`
+> / `@moondb.Text` (add `moon add Lfan-ke/moondb`). The SQLite driver's package name is
+> hyphenated, so import it under an alias in `moon.pkg.json`
+> (`{"path": "Lfan-ke/moon-sqlite", "alias": "sqlite"}`) and reach it as `@sqlite`.
+
 ## Quickstart
 
 ```moonbit
 let (sql, params) = @moonorm.select("users")
   .column("id").column("name")
-  .eq("age", @moonorm.Int(18))
-  .where_("name", "LIKE", @moonorm.Text("bob%"))
+  .eq("age", @moondb.Int(18))
+  .where_("name", "LIKE", @moondb.Text("bob%"))
   .order_by("name", @moonorm.Asc)
   .limit(10)
   .build()
@@ -28,20 +34,20 @@ let (sql, params) = @moonorm.select("users")
 // params = [Int(18), Text("bob%")]
 
 let (isql, ivals) = @moonorm.insert("users")
-  .set("name", @moonorm.Text("bob")).set("age", @moonorm.Int(30)).build()
+  .set("name", @moondb.Text("bob")).set("age", @moondb.Int(30)).build()
 // "INSERT INTO users (name, age) VALUES (?, ?)"
 
-@moonorm.update("users").set("age", @moonorm.Int(31)).where_("id", "=", @moonorm.Int(1)).build()
-@moonorm.delete("users").where_("id", "=", @moonorm.Int(9)).build()
+@moonorm.update("users").set("age", @moondb.Int(31)).where_("id", "=", @moondb.Int(1)).build()
+@moonorm.delete("users").where_("id", "=", @moondb.Int(9)).build()
 
 // JOIN + GROUP BY + HAVING, with aggregates and a Table descriptor:
 let orders : @moonorm.Table = { name: "orders", columns: [] }
 let (jsql, jparams) = orders.select()
   .raw("users.name").count()
   .join("users", "users.id = orders.user_id")
-  .eq("orders.status", @moonorm.Text("paid"))
+  .eq("orders.status", @moondb.Text("paid"))
   .group_by("users.name")
-  .having("COUNT(*)", ">", @moonorm.Int(3))
+  .having("COUNT(*)", ">", @moondb.Int(3))
   .build()
 // "SELECT users.name, COUNT(*) FROM orders JOIN users ON users.id = orders.user_id
 //  WHERE orders.status = ? GROUP BY users.name HAVING COUNT(*) > ?"
@@ -60,16 +66,16 @@ that error:
 ```moonbit
 // native target only — moon-sqlite links the vendored amalgamation.
 fn demo() -> Unit raise @moondb.DbError {
-  let sess = @moonorm.Session::new(@moon_sqlite.SqliteDriver::open(":memory:"))
+  let sess = @moonorm.Session::new(@sqlite.SqliteDriver::open(":memory:"))
   sess.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)", []) |> ignore
 
   // INSERT through the builder — values are bound, never spliced.
-  sess.add(@moonorm.insert("users").set("name", @moonorm.Text("alice")).set("age", @moonorm.Int(30)))
+  sess.add(@moonorm.insert("users").set("name", @moondb.Text("alice")).set("age", @moondb.Int(30)))
   |> ignore
 
   // SELECT through the builder — real rows come back, typed.
   let rows = sess.fetch(
-    @moonorm.select("users").column("name").column("age").where_("age", ">", @moonorm.Int(18)),
+    @moonorm.select("users").column("name").column("age").where_("age", ">", @moondb.Int(18)),
   )
   let _ = rows[0].text(0)  // "alice"  (raises TypeError if the column isn't Text)
   let _ = rows[0].int(1)   // 30
@@ -105,7 +111,7 @@ let teams : @moonorm.Model[Team] = @moonorm.Model::new(
   [@moonorm.column("id", @moonorm.IntType, primary_key=true),
    @moonorm.column("name", @moonorm.TextType, nullable=false)],
   (r) => { id: r.int(0), name: r.text(1) },
-  (t) => [("id", @moonorm.Int(t.id)), ("name", @moonorm.Text(t.name))],
+  (t) => [("id", @moondb.Int(t.id)), ("name", @moondb.Text(t.name))],
 )
 let heroes : @moonorm.Model[Hero] = @moonorm.Model::new(
   "heroes",
@@ -113,8 +119,8 @@ let heroes : @moonorm.Model[Hero] = @moonorm.Model::new(
    @moonorm.column("name", @moonorm.TextType, nullable=false),
    @moonorm.column("team_id", @moonorm.IntType, references=Some(("teams", "id")))],
   (r) => { id: r.int(0), name: r.text(1), team_id: r.int(2) },
-  (h) => [("id", @moonorm.Int(h.id)), ("name", @moonorm.Text(h.name)),
-          ("team_id", @moonorm.Int(h.team_id))],
+  (h) => [("id", @moondb.Int(h.id)), ("name", @moondb.Text(h.name)),
+          ("team_id", @moondb.Int(h.team_id))],
 )
 
 sess.create_table(teams) |> ignore          // CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT NOT NULL)
@@ -123,11 +129,11 @@ sess.insert_record(teams, { id: 1, name: "avengers" }) |> ignore
 sess.insert_record(heroes, { id: 10, name: "iron-man", team_id: 1 }) |> ignore
 
 // 1:N — a team's heroes, eager-loaded as mapped records.
-let children = @moonorm.has_many(heroes, "team_id", (t : Team) => @moonorm.Int(t.id))
+let children = @moonorm.has_many(heroes, "team_id", (t : Team) => @moondb.Int(t.id))
 let kids = sess.load({ id: 1, name: "avengers" }, children)   // [Hero{...}, ...]
 
 // N:1 — a hero's team.
-let parent = @moonorm.belongs_to(teams, "id", (h : Hero) => @moonorm.Int(h.team_id))
+let parent = @moonorm.belongs_to(teams, "id", (h : Hero) => @moondb.Int(h.team_id))
 let team = sess.load_one({ id: 10, name: "iron-man", team_id: 1 }, parent)  // Some(Team{...})
 ```
 
@@ -153,7 +159,7 @@ injection-safe like every other query.
 
 ```moonbit
 let evil = "'; DROP TABLE users; --"
-let (sql, params) = @moonorm.select("users").eq("name", @moonorm.Text(evil)).build()
+let (sql, params) = @moonorm.select("users").eq("name", @moondb.Text(evil)).build()
 // sql    = "SELECT * FROM users WHERE name = ?"   ← the attack string is NOT in the SQL
 // params = [Text("'; DROP TABLE users; --")]      ← it's a bound parameter
 ```
