@@ -77,8 +77,58 @@ rows[0].int(1)   // Some(30)
 ```
 
 `Session` also has `modify` (UPDATE), `remove` (DELETE), `begin` / `commit` /
-`rollback`, and raw `execute` / `query`. Everything travels as bound parameters,
-so the injection-safety guarantee reaches all the way to the wire.
+`rollback`, nested transactions via `savepoint` / `rollback_to` / `release`
+(SQLAlchemy's `begin_nested`), and raw `execute` / `query`. Everything travels as
+bound parameters, so the injection-safety guarantee reaches all the way to the wire.
+
+## Models & relationships
+
+A `Model[T]` is the explicit declarative mapping between a table and a MoonBit
+record — the typed columns plus the two mapping closures MoonBit cannot synthesise
+for want of reflection (`Row -> record`, `record -> bound columns`). From it you get
+`CREATE TABLE` DDL, typed inserts, and eager foreign-key loading. Because MoonBit
+has no attribute interception, `parent.children` cannot silently fire a SELECT the
+way SQLAlchemy's lazy load does; the load is an explicit call — `session.load` /
+`session.load_one` — exactly the shape Diesel's preload and GORM's `Preload` take.
+
+```moonbit
+// A parent model and a child model with a foreign key back to it.
+let teams : @moonorm.Model[Team] = @moonorm.Model::new(
+  "teams",
+  [@moonorm.column("id", @moonorm.IntType, primary_key=true),
+   @moonorm.column("name", @moonorm.TextType, nullable=false)],
+  fn(r) { { id: r.int(0).unwrap(), name: r.text(1).unwrap() } },
+  fn(t) { [("id", @moonorm.Int(t.id)), ("name", @moonorm.Text(t.name))] },
+)
+let heroes : @moonorm.Model[Hero] = @moonorm.Model::new(
+  "heroes",
+  [@moonorm.column("id", @moonorm.IntType, primary_key=true),
+   @moonorm.column("name", @moonorm.TextType, nullable=false),
+   @moonorm.column("team_id", @moonorm.IntType, references=Some(("teams", "id")))],
+  fn(r) { { id: r.int(0).unwrap(), name: r.text(1).unwrap(), team_id: r.int(2).unwrap() } },
+  fn(h) { [("id", @moonorm.Int(h.id)), ("name", @moonorm.Text(h.name)),
+           ("team_id", @moonorm.Int(h.team_id))] },
+)
+
+sess.create_table(teams) |> ignore          // CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT NOT NULL)
+sess.create_table(heroes) |> ignore
+sess.insert_record(teams, { id: 1, name: "avengers" }) |> ignore
+sess.insert_record(heroes, { id: 10, name: "iron-man", team_id: 1 }) |> ignore
+
+// 1:N — a team's heroes, eager-loaded as mapped records.
+let children = @moonorm.has_many(heroes, "team_id", fn(t : Team) { @moonorm.Int(t.id) })
+let kids = sess.load({ id: 1, name: "avengers" }, children)   // Ok([Hero{...}, ...])
+
+// N:1 — a hero's team.
+let parent = @moonorm.belongs_to(teams, "id", fn(h : Hero) { @moonorm.Int(h.team_id) })
+let team = sess.load_one({ id: 10, name: "iron-man", team_id: 1 }, parent)  // Ok(Some(Team{...}))
+```
+
+The relationship's match value is bound, never spliced, so eager loading is
+injection-safe like every other query. The integration tests open a real SQLite
+database, create parent/child tables, insert linked rows, then `load` a parent's
+children and a child's parent and assert on the mapped records — mutation-verified
+(flipping the join predicate turns them red).
 
 ### Design & boundaries (honest)
 

@@ -11,7 +11,13 @@ SECTIONS = [
      "rendering (sql, params) - values are always ? placeholders, never spliced in."),
     ("session", "session.mbt", "Execution layer",
      "The backend-agnostic Driver trait, typed Row accessors, and an explicit "
-     "Session that runs built statements against a real database and returns rows."),
+     "Session that runs built statements against a real database and returns rows - "
+     "including SAVEPOINT-based nested transactions and eager relationship loading."),
+    ("models", "models.mbt", "Models & relationships",
+     "The declarative model layer: typed columns, a Model[T] Row<->record mapper, "
+     "CREATE TABLE DDL, and foreign-key 1:N / N:1 relationships loaded explicitly "
+     "via session.load / session.load_one (the faithful attribute-interception "
+     "equivalent, as Diesel and GORM also make explicit)."),
     ("sqlite", "sqlite/sqlite.mbt", "SQLite driver (native)",
      "A real native SQLite backend over the vendored amalgamation - implements "
      "Driver, so Session executes actual CREATE / INSERT / SELECT / UPDATE / DELETE."),
