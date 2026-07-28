@@ -1,0 +1,4 @@
+// moonorm (<- SQLAlchemy / SQLModel). v0 = the parameterized query builder, the
+// heart of SQLAlchemy Core: it emits SQL with `?` placeholders and a params list,
+// so values are never interpolated into the string (injection-safe by construction).
+// Pure logic, no deps; the async DB drivers are sequenced after.
