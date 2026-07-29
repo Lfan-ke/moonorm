@@ -52,6 +52,35 @@ test "pool over real SQLite: max_size caps concurrent checkouts" {
 }
 
 ///|
+test "pool over real SQLite: pre_ping evicts a connection closed underneath it" {
+  let opened = [0]
+  let pool = @moondb.Pool::new(
+    () => {
+      opened[0] = opened[0] + 1
+      @sqlite.SqliteDriver::open(":memory:")
+    },
+    max_size=2,
+    pre_ping=true,
+  )
+  let c1 = pool.acquire()
+  assert_eq(opened[0], 1)
+  // The connection dies while checked out; the pool cannot know until it probes.
+  c1.close()
+  pool.release(c1)
+  assert_eq(pool.idle_count(), 1)
+  // pre_ping runs the driver's real `SELECT 1`, which fails on the closed handle, so
+  // the dead connection is evicted and a fresh one is opened in its place.
+  let c2 = pool.acquire()
+  assert_eq(c2.is_closed(), false)
+  assert_eq(opened[0], 2)
+  // And it genuinely works: run a statement through the replacement.
+  c2.execute("CREATE TABLE t (n INTEGER)", []) |> ignore
+  assert_eq(c2.query("SELECT count(*) FROM t", [])[0].int(0), 0)
+  pool.release(c2)
+  pool.close_all()
+}
+
+///|
 test "pool over real SQLite: with_conn runs a statement and returns the connection" {
   let pool = mem_pool()
   let n = pool.with_conn(db => {

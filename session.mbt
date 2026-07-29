@@ -492,6 +492,22 @@ pub fn[S, T] Session::load_one(
 }
 
 ///|
+/// Normalise a key value for in-memory matching so a bound key equals the column
+/// value a backend hands back, even across integer widths. A source key is built as
+/// `Int(1)`, but SQLite (and others) return that column as `Int64(1)`, and the two
+/// are distinct `Value` variants — a naive `==` would miss. Single-row `load` sidesteps
+/// this because the match runs in SQL; a batch load matches in memory and must
+/// reconcile the widths. Integers collapse to `Int64` and booleans to their `0`/`1`
+/// integer (how SQL backends store them); other kinds compare as-is.
+fn canonical_key(v : @moondb.Value) -> @moondb.Value {
+  match v {
+    @moondb.Int(n) => @moondb.Int64(n.to_int64())
+    @moondb.Bool(b) => @moondb.Int64(if b { 1L } else { 0L })
+    other => other
+  }
+}
+
+///|
 /// Eagerly load a 1:N relationship for *many* sources in a single query, avoiding
 /// the N+1 problem. Naively calling `load` in a loop fires one SELECT per source;
 /// this instead issues one `SELECT … WHERE key_column IN (all the source keys)`,
@@ -531,7 +547,7 @@ pub fn[S, T] Session::load_batch(
     }
     let record = rel.target.map_row(row)
     for i = 0; i < sources.length(); i = i + 1 {
-      if rel.source_value(sources[i]) == child_key {
+      if canonical_key(rel.source_value(sources[i])) == canonical_key(child_key) {
         result[i].push(record)
       }
     }
@@ -569,7 +585,8 @@ pub fn[S, T] Session::load_one_batch(
     }
     let record = rel.target.map_row(row)
     for i = 0; i < sources.length(); i = i + 1 {
-      if result[i] is None && rel.source_value(sources[i]) == parent_key {
+      if result[i] is None &&
+        canonical_key(rel.source_value(sources[i])) == canonical_key(parent_key) {
         result[i] = Some(record)
       }
     }

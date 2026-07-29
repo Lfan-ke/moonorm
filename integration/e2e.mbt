@@ -179,6 +179,30 @@ test "e2e: migrations, Session CRUD, CTE select, optimistic lock on real SQLite"
   assert_eq(iron[0].name, "iron man")
   assert_eq(iron[0].version, 2)
 
+  // --- N+1-avoiding batch load --------------------------------------------
+  // Load every team's heroes in one IN query and check the grouping lands on the
+  // real backend: avengers (id 1) has two heroes, x-men (id 2) has one.
+  let teams_all = sess.all(teams)
+  assert_eq(teams_all.length(), 2)
+  let children : @orm.Relation[Team, Hero] = @orm.has_many(
+    heroes, "team_id", (t : Team) => @moondb.Int(t.id),
+  )
+  let by_team = sess.load_batch(teams_all, children)
+  assert_eq(by_team.length(), 2)
+  assert_eq(by_team[0].length(), 2) // avengers
+  assert_eq(by_team[1].length(), 1) // x-men
+  assert_eq(by_team[1][0].name, "wolverine")
+  // The N:1 direction, batched: each hero resolves to its team in one query.
+  let all_heroes2 = sess.all(heroes)
+  let parent : @orm.Relation[Hero, Team] = @orm.belongs_to(
+    teams, "id", (h : Hero) => @moondb.Int(h.team_id),
+  )
+  let teams_of = sess.load_one_batch(all_heroes2, parent)
+  assert_eq(teams_of.length(), 3)
+  for t in teams_of {
+    assert_eq(t is Some(_), true)
+  }
+
   // --- migrations down -----------------------------------------------------
   let rolled = migrator.down_to(sess, migrations(), 0)
   assert_eq(rolled, 3)

@@ -13,7 +13,7 @@ keywords = [ "moonorm", "sqlite", "integration", "test", "moonbit" ]
 description = "End-to-end integration tests wiring published moonorm + moon-sqlite against a real SQLite file. Not published; exists so CI proves the ORM runs migrations and a Session over a real backend."
 
 import {
-  "Lfan-ke/moonorm@0.6.0",
-  "Lfan-ke/moon-sqlite@0.1.3",
-  "Lfan-ke/moondb@0.1.3",
+  "Lfan-ke/moonorm@0.6.3",
+  "Lfan-ke/moon-sqlite@0.1.4",
+  "Lfan-ke/moondb@0.1.4",
 }
