@@ -203,3 +203,24 @@ test "session.load / load_one decode related echoed rows into records" {
   assert_eq(many[0], { id: 2, name: "x-men" })
   sess.close()
 }
+
+///|
+test "session stream: raw and typed cursors yield the same records as the buffered forms" {
+  let sess = Session::new(@moondb.MockDriver::new())
+  let teams = team_model()
+  sess.insert_record(teams, { id: 1, name: "avengers" }) |> ignore
+  sess.insert_record(teams, { id: 2, name: "x-men" }) |> ignore
+  // A raw cursor drains to exactly what fetch materialises.
+  let buffered = sess.fetch(teams.select())
+  let streamed = @moondb.drain(sess.stream(teams.select()))
+  assert_eq(streamed.length(), buffered.length())
+  assert_eq(streamed.length(), 2)
+  // A typed cursor decodes each row on demand, matching `all`.
+  let rs = sess.stream_as(teams, teams.select())
+  let got : Array[Team] = []
+  for rec = rs.next(); rec is Some(t); rec = rs.next() {
+    got.push(t)
+  }
+  assert_eq(got, [{ id: 1, name: "avengers" }, { id: 2, name: "x-men" }])
+  sess.close()
+}

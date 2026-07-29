@@ -74,6 +74,66 @@ pub fn Session::fetch(
 }
 
 ///|
+/// Stream a raw query's rows through a [`@moondb.Cursor`] instead of materialising
+/// them — the bounded-memory counterpart to [`query`], for result sets too large to
+/// hold at once (SQLAlchemy's `stream_results`). A driver with incremental fetch
+/// (moon-sqlite, the async wire drivers) yields rows lazily; others fall back to a
+/// cursor over a materialised array.
+pub fn Session::query_stream(
+  self : Session,
+  sql : String,
+  params : Array[@moondb.Value],
+) -> &@moondb.Cursor raise @moondb.DbError {
+  self.driver.query_stream(sql, params)
+}
+
+///|
+/// Build and stream a `Select`, yielding raw rows through a cursor.
+pub fn Session::stream(
+  self : Session,
+  stmt : Select,
+) -> &@moondb.Cursor raise @moondb.DbError {
+  let (sql, params) = stmt.build()
+  self.driver.query_stream(sql, params)
+}
+
+///|
+/// A typed streaming cursor: each [`next`](RowStream::next) decodes one row into a
+/// record via the model. The record-level counterpart to [`Session::stream`], the
+/// streaming form of [`fetch_as`] (SQLAlchemy's `yield_per`).
+pub struct RowStream[T] {
+  cursor : &@moondb.Cursor
+  model : Model[T]
+}
+
+///|
+/// The next decoded record, or `None` once the result is exhausted.
+pub fn[T] RowStream::next(self : RowStream[T]) -> T? raise @moondb.DbError {
+  match self.cursor.next() {
+    Some(row) => Some(self.model.map_row(row))
+    None => None
+  }
+}
+
+///|
+/// Release the underlying cursor early.
+pub fn[T] RowStream::close(self : RowStream[T]) -> Unit {
+  self.cursor.close()
+}
+
+///|
+/// Build and stream a `Select`, decoding each row into a `T` on demand — the
+/// streaming counterpart to [`fetch_as`].
+pub fn[T] Session::stream_as(
+  self : Session,
+  model : Model[T],
+  stmt : Select,
+) -> RowStream[T] raise @moondb.DbError {
+  let (sql, params) = stmt.build()
+  { cursor: self.driver.query_stream(sql, params), model }
+}
+
+///|
 /// Build and run an `Update`, returning the affected-row count.
 pub fn Session::modify(
   self : Session,

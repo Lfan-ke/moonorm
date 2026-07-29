@@ -149,3 +149,36 @@ test "sqlite: a bad statement surfaces SQLite's message as QueryError" {
   }
   db.close()
 }
+
+///|
+test "sqlite query_stream steps rows lazily and matches query" {
+  let db = open_mem()
+  db.execute("CREATE TABLE s (id INTEGER, name TEXT)", []) |> ignore
+  for i in 1..<6 {
+    db.execute("INSERT INTO s VALUES (?, ?)", [
+      @moondb.Int(i),
+      @moondb.Text("n" + i.to_string()),
+    ])
+    |> ignore
+  }
+  // Draining the cursor yields exactly what a buffered query would.
+  let streamed = @moondb.drain(
+    db.query_stream("SELECT id, name FROM s ORDER BY id", []),
+  )
+  let buffered = db.query("SELECT id, name FROM s ORDER BY id", [])
+  assert_eq(streamed.length(), 5)
+  assert_eq(streamed.length(), buffered.length())
+  let mut same = true
+  for i in 0..<streamed.length() {
+    if !(streamed[i].values == buffered[i].values) {
+      same = false
+    }
+  }
+  assert_eq(same, true)
+  // Early close mid-stream, then the connection runs the next statement.
+  let cur = db.query_stream("SELECT id FROM s ORDER BY id", [])
+  assert_eq(cur.next() is Some(_), true)
+  cur.close()
+  assert_eq(db.query("SELECT count(*) FROM s", [])[0].int64(0), 5L)
+  db.close()
+}

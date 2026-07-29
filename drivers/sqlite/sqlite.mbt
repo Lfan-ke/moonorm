@@ -146,6 +146,68 @@ pub impl @moondb.Driver for SqliteDriver with fn query(self, sql, params) {
 }
 
 ///|
+/// A streaming cursor over a live prepared statement: each `next` steps SQLite once
+/// and materialises a single row, so a large result is consumed row by row
+/// (moondb's `query_stream`) rather than buffered by `query`. The statement is
+/// finalised at the end of the result or on `close`.
+struct SqliteCursor {
+  driver : SqliteDriver
+  st : Int64
+  cols : Array[String]
+  ncol : Int
+  mut done : Bool
+}
+
+///|
+pub impl @moondb.Cursor for SqliteCursor with fn next(self : SqliteCursor) -> @moondb.Row? raise @moondb.DbError {
+  if self.done {
+    return None
+  }
+  let rc = ffi_step(self.st)
+  if rc != sqlite_row {
+    ffi_finalize(self.st) |> ignore
+    self.done = true
+    if rc != sqlite_done {
+      raise @moondb.QueryError(bytes_to_str(ffi_errmsg(self.driver.handle)))
+    }
+    return None
+  }
+  let vals : Array[@moondb.Value] = []
+  for i = 0; i < self.ncol; i = i + 1 {
+    let v : @moondb.Value = match ffi_col_type(self.st, i) {
+      1 => @moondb.Int64(ffi_col_int64(self.st, i))
+      2 => @moondb.Double(ffi_col_double(self.st, i))
+      3 => @moondb.Text(bytes_to_str(ffi_col_text(self.st, i)))
+      4 => @moondb.Blob(ffi_col_blob(self.st, i))
+      _ => @moondb.Null
+    }
+    vals.push(v)
+  }
+  Some({ columns: self.cols, values: vals })
+}
+
+///|
+pub impl @moondb.Cursor for SqliteCursor with fn close(self : SqliteCursor) -> Unit {
+  if !self.done {
+    ffi_finalize(self.st) |> ignore
+    self.done = true
+  }
+}
+
+///|
+/// Stream a query's rows through a live [`@moondb.Cursor`] backed by a prepared
+/// statement — the incremental override of the materialising default.
+pub impl @moondb.Driver for SqliteDriver with fn query_stream(self, sql, params) {
+  let st = self.prepare_bound(sql, params)
+  let ncol = ffi_col_count(st)
+  let cols : Array[String] = []
+  for i = 0; i < ncol; i = i + 1 {
+    cols.push(bytes_to_str(ffi_col_name(st, i)))
+  }
+  SqliteCursor::{ driver: self, st, cols, ncol, done: false }
+}
+
+///|
 pub impl @moondb.Driver for SqliteDriver with fn begin(self) {
   self.run_txn("BEGIN")
 }

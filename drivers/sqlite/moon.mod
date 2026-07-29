@@ -23,5 +23,5 @@ description = "SQLite driver for moondb/moonorm — native FFI, amalgamation ven
 preferred_target = "native"
 
 import {
-  "Lfan-ke/moondb@0.1.0",
+  "Lfan-ke/moondb@0.1.5",
 }
