@@ -302,3 +302,57 @@ test "upsert injection-safe: a hostile value stays bound, never spliced" {
   assert_eq(params[1] == Text(evil), true)
   assert_eq(params[2] == Text(evil), true)
 }
+
+///|
+test "SELECT DISTINCT dedups the projection" {
+  let (sql, _) = select("orders").distinct().column("city").build()
+  assert_eq(sql, "SELECT DISTINCT city FROM orders")
+}
+
+///|
+test "set operations render per the SQL standard" {
+  assert_eq(
+    select("a").column("x").union(select("b").column("x")).build().0,
+    "SELECT x FROM a UNION SELECT x FROM b",
+  )
+  assert_eq(
+    select("a").column("x").union_all(select("b").column("x")).build().0,
+    "SELECT x FROM a UNION ALL SELECT x FROM b",
+  )
+  assert_eq(
+    select("a").column("x").intersect(select("b").column("x")).build().0,
+    "SELECT x FROM a INTERSECT SELECT x FROM b",
+  )
+  assert_eq(
+    select("a").column("x").except_(select("b").column("x")).build().0,
+    "SELECT x FROM a EXCEPT SELECT x FROM b",
+  )
+}
+
+///|
+test "a trailing ORDER BY / LIMIT binds to the whole compound" {
+  let (sql, _) = select("a")
+    .column("x")
+    .union(select("b").column("x"))
+    .order_by("x", Asc)
+    .limit(10)
+    .build()
+  assert_eq(
+    sql, "SELECT x FROM a UNION SELECT x FROM b ORDER BY x ASC LIMIT 10",
+  )
+}
+
+///|
+test "parameters thread through both set-operation operands in order" {
+  let (sql, params) = select("a")
+    .column("x")
+    .where_("x", ">", Int(1))
+    .union(select("b").column("x").where_("x", "<", Int(9)))
+    .build()
+  assert_eq(
+    sql, "SELECT x FROM a WHERE x > ? UNION SELECT x FROM b WHERE x < ?",
+  )
+  assert_eq(params.length(), 2)
+  assert_eq(params[0] == Int(1), true)
+  assert_eq(params[1] == Int(9), true)
+}

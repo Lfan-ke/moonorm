@@ -111,6 +111,10 @@ pub struct Select {
   groups : Array[String]
   havings : Array[Cond]
   orders : Array[(String, Order)]
+  // Set operations chained onto this query: (keyword, operand). The compound's
+  // ORDER BY / LIMIT come from this outer `Select`, applying to the whole result.
+  set_ops : Array[(String, Select)]
+  mut distinct_ : Bool
   mut limit_ : Int?
   mut offset_ : Int?
 }
@@ -129,9 +133,47 @@ pub fn select(table : String) -> Select {
     groups: [],
     havings: [],
     orders: [],
+    set_ops: [],
+    distinct_: false,
     limit_: None,
     offset_: None,
   }
+}
+
+///|
+/// Deduplicate the result set: `SELECT DISTINCT`. Applies to this query's own
+/// projection (each operand of a set operation carries its own DISTINCT).
+pub fn Select::distinct(self : Select) -> Select {
+  self.distinct_ = true
+  self
+}
+
+///|
+/// `UNION` this query with `other` — the combined rows with duplicates removed.
+pub fn Select::union(self : Select, other : Select) -> Select {
+  self.set_ops.push(("UNION", other))
+  self
+}
+
+///|
+/// `UNION ALL` — the combined rows keeping duplicates.
+pub fn Select::union_all(self : Select, other : Select) -> Select {
+  self.set_ops.push(("UNION ALL", other))
+  self
+}
+
+///|
+/// `INTERSECT` — rows present in both queries.
+pub fn Select::intersect(self : Select, other : Select) -> Select {
+  self.set_ops.push(("INTERSECT", other))
+  self
+}
+
+///|
+/// `EXCEPT` — rows in this query but not in `other` (SQL's set difference).
+pub fn Select::except_(self : Select, other : Select) -> Select {
+  self.set_ops.push(("EXCEPT", other))
+  self
 }
 
 ///|
@@ -345,6 +387,7 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
   }
   sql = sql +
     "SELECT " +
+    (if self.distinct_ { "DISTINCT " } else { "" }) +
     (if self.cols.length() == 0 { "*" } else { join(self.cols, ", ") }) +
     " FROM " +
     self.table
@@ -391,6 +434,16 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
       params.push(h.val)
     }
     sql = sql + " HAVING " + join(hparts, " AND ")
+  }
+  // Set operations chain after this query's core; a trailing ORDER BY / LIMIT then
+  // applies to the whole compound (SQL binds them to the last query otherwise).
+  for so in self.set_ops {
+    let (op, other) = so
+    let (sub_sql, sub_params) = other.build()
+    sql = sql + " " + op + " " + sub_sql
+    for p in sub_params {
+      params.push(p)
+    }
   }
   if self.orders.length() > 0 {
     let oparts : Array[String] = []
