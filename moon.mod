@@ -1,6 +1,6 @@
 name = "Lfan-ke/moonorm"
 
-version = "0.6.3"
+version = "0.7.0"
 
 readme = "README.md"
 
