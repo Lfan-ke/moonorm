@@ -5,7 +5,7 @@ priv struct MU {
 
 ///|
 test "multi-dialect CREATE TABLE renders per-engine types and autoincrement" {
-  let m = Model::new(
+  let m : Model[MU] = Model::new(
     "u",
     [
       column("id", IntType, primary_key=true, autoincrement=true),
@@ -14,7 +14,7 @@ test "multi-dialect CREATE TABLE renders per-engine types and autoincrement" {
       column("doc", JsonType),
     ],
     r => { id: r.int(0) },
-    _ => [],
+    x => [("id", @moondb.Int(x.id))],
   )
   assert_eq(
     m.create_table_sql_for(Postgres),
