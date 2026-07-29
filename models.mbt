@@ -44,6 +44,7 @@ pub(all) struct Column {
   col_type : ColumnType
   primary_key : Bool
   nullable : Bool
+  unique : Bool
   references : (String, String)?
 }
 
@@ -57,9 +58,10 @@ pub fn column(
   col_type : ColumnType,
   primary_key? : Bool = false,
   nullable? : Bool = true,
+  unique? : Bool = false,
   references? : (String, String)? = None,
 ) -> Column {
-  { name, col_type, primary_key, nullable, references }
+  { name, col_type, primary_key, nullable, unique, references }
 }
 
 ///|
@@ -74,6 +76,9 @@ pub fn Column::ddl(self : Column) -> String {
     s = s + " PRIMARY KEY"
   } else if !self.nullable {
     s = s + " NOT NULL"
+  }
+  if self.unique && !self.primary_key {
+    s = s + " UNIQUE"
   }
   match self.references {
     Some((t, c)) => s = s + " REFERENCES " + t + "(" + c + ")"
@@ -113,9 +118,13 @@ pub fn[T] field(
   encode : (T) -> Value,
   primary_key? : Bool = false,
   nullable? : Bool = true,
+  unique? : Bool = false,
   references? : (String, String)? = None,
 ) -> Field[T] {
-  { column: { name, col_type, primary_key, nullable, references }, encode }
+  {
+    column: { name, col_type, primary_key, nullable, unique, references },
+    encode,
+  }
 }
 
 ///|
