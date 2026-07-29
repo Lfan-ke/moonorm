@@ -317,6 +317,109 @@ pub async fn MysqlConn::query(
 }
 
 ///|
+/// A forward-only cursor that reads a query's rows off the wire on demand instead
+/// of buffering them — the streaming counterpart to [`query`], for results too
+/// large to materialise at once (`mysql_use_result`, SQLAlchemy's
+/// `stream_results`). Bound to its `MysqlConn`, a single-command pipeline: the
+/// stream must be drained (`next` returns `None`) or [`close`d](MysqlRowStream::close)
+/// before another statement runs on that connection.
+pub struct MysqlRowStream {
+  conn : MysqlConn
+  columns : Array[@moon_mysql.ColumnDef]
+  mut pending : Bytes?
+  mut done : Bool
+}
+
+///|
+/// Send a row-returning statement and return a streaming cursor over its rows. The
+/// column definitions and their terminating EOF are consumed up front; the rows
+/// themselves are read one at a time by [`next`](MysqlRowStream::next).
+pub async fn MysqlConn::query_stream(
+  self : MysqlConn,
+  sql : String,
+  params : Array[@moondb.Value],
+) -> MysqlRowStream {
+  if self.closed {
+    raise @moondb.Closed
+  }
+  let payload = Buffer()
+  payload.write_byte(b'\x03') // COM_QUERY
+  payload.write_bytes(@moon_mysql.bind_params(sql, params)[:])
+  self.write_packet(0, payload.to_bytes())
+  let first = self.read_packet()
+  if @moon_mysql.is_err_packet(first) {
+    raise @moon_mysql.parse_err(first)
+  }
+  // OK ⇒ no result set: an already-exhausted stream.
+  if @moon_mysql.is_ok_packet(first) {
+    return { conn: self, columns: [], pending: None, done: true }
+  }
+  if first.length() > 0 && first[0].to_int() == 0xFB {
+    raise @moon_mysql.UnsupportedError("LOCAL INFILE is not supported")
+  }
+  let reader = @moon_mysql.PacketReader::new(first)
+  let column_count = reader.lenenc_uint().to_int()
+  let columns : Array[@moon_mysql.ColumnDef] = []
+  for _ in 0..<column_count {
+    columns.push(@moon_mysql.parse_column_def(self.read_packet()))
+  }
+  let after_columns = self.read_packet()
+  if @moon_mysql.is_err_packet(after_columns) {
+    raise @moon_mysql.parse_err(after_columns)
+  }
+  // CLIENT_DEPRECATE_EOF is unset, so an EOF closes the column block; anything else
+  // is defensively the first row.
+  let pending = if @moon_mysql.is_eof_packet(after_columns) {
+    None
+  } else {
+    Some(after_columns)
+  }
+  { conn: self, columns, pending, done: false }
+}
+
+///|
+/// The next row, or `None` at the EOF that ends the result set. An `ErrorResponse`
+/// mid-stream is raised.
+pub async fn MysqlRowStream::next(self : MysqlRowStream) -> @moondb.Row? {
+  if self.done {
+    return None
+  }
+  let packet = match self.pending {
+    Some(p) => {
+      self.pending = None
+      p
+    }
+    None => self.conn.read_packet()
+  }
+  if @moon_mysql.is_err_packet(packet) {
+    self.done = true
+    raise @moon_mysql.parse_err(packet)
+  }
+  if @moon_mysql.is_eof_packet(packet) {
+    self.done = true
+    return None
+  }
+  Some(@moon_mysql.build_text_rows(self.columns, [packet])[0])
+}
+
+///|
+/// Abandon the stream early, draining any unread rows to the terminating EOF so the
+/// connection can run the next statement. Idempotent once the stream is done.
+pub async fn MysqlRowStream::close(self : MysqlRowStream) -> Unit {
+  if self.done {
+    return
+  }
+  self.pending = None
+  for ;; {
+    let p = self.conn.read_packet()
+    if @moon_mysql.is_eof_packet(p) || @moon_mysql.is_err_packet(p) {
+      break
+    }
+  }
+  self.done = true
+}
+
+///|
 /// Begin a server-side transaction.
 pub async fn MysqlConn::begin(self : MysqlConn) -> Unit {
   let _ = self.command(b"START TRANSACTION")

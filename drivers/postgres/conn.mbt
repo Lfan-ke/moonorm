@@ -20,8 +20,9 @@ pub struct PgConn {
 
 ///|
 /// Open a connection and complete the startup handshake: send StartupMessage,
-/// satisfy the authentication request (trust/`AuthenticationOk`, cleartext, or
-/// MD5), and drain server parameters up to the first `ReadyForQuery`. `host` may
+/// satisfy the authentication request (trust/`AuthenticationOk`, cleartext, MD5,
+/// or SASL/SCRAM-SHA-256), and drain server parameters up to the first
+/// `ReadyForQuery`. `host` may
 /// be a hostname or a literal IP; `port` is typically 5432. Raises
 /// `ConnectError` on any transport or handshake failure, including an
 /// unsupported auth method.
@@ -325,11 +326,15 @@ pub async fn PgConn::execute(
 }
 
 ///|
-async fn PgConn::run_statement(
+/// Send a statement on the wire: the simple Query protocol when `params` is empty,
+/// otherwise the extended Parse/Bind/Describe/Execute/Sync batch (with `?`→`$n`
+/// translation and out-of-band text binding). The response is left on the socket
+/// for [`read_results`] or a [`PgRowStream`] to consume.
+async fn PgConn::send_statement(
   self : PgConn,
   sql : String,
   params : Array[Value],
-) -> QueryOutcome raise DbError {
+) -> Unit raise DbError {
   if self.closed {
     raise @moondb.Closed
   }
@@ -346,7 +351,89 @@ async fn PgConn::run_statement(
     )
     self.write_all(batch)
   }
+}
+
+///|
+async fn PgConn::run_statement(
+  self : PgConn,
+  sql : String,
+  params : Array[Value],
+) -> QueryOutcome raise DbError {
+  self.send_statement(sql, params)
   self.read_results()
+}
+
+///|
+/// A forward-only cursor that reads a query's rows off the wire on demand instead
+/// of buffering them — the streaming counterpart to [`query`], for results too
+/// large to materialise (asyncpg's cursor, SQLAlchemy's `stream_results`). It is
+/// bound to its `PgConn`, which is a single-statement pipeline: the stream must be
+/// drained (`next` returns `None`) or [`close`d](PgRowStream::close) before another
+/// statement runs on that connection.
+pub struct PgRowStream {
+  conn : PgConn
+  mut col_names : Array[String]
+  mut col_oids : Array[Int]
+  mut done : Bool
+}
+
+///|
+/// Send `sql` (with bound `params`) and return a streaming cursor over its rows.
+pub async fn PgConn::query_stream(
+  self : PgConn,
+  sql : String,
+  params : Array[Value],
+) -> PgRowStream raise DbError {
+  self.send_statement(sql, params)
+  { conn: self, col_names: [], col_oids: [], done: false }
+}
+
+///|
+/// The next row, or `None` once the result is exhausted. Reads messages until a
+/// `DataRow` (updating the column metadata from any `RowDescription` first), and on
+/// `ReadyForQuery` marks the stream done. An `ErrorResponse` is drained to
+/// ReadyForQuery before raising, so the connection stays usable.
+pub async fn PgRowStream::next(self : PgRowStream) -> Row? raise DbError {
+  if self.done {
+    return None
+  }
+  for ;; {
+    let (tag, payload) = self.conn.read_message()
+    match tag {
+      // 'T' RowDescription
+      84 => {
+        let (names, oids) = parse_row_description(payload)
+        self.col_names = names
+        self.col_oids = oids
+      }
+      // 'D' DataRow
+      68 => return Some(parse_data_row(payload, self.col_names, self.col_oids))
+      // 'E' ErrorResponse
+      69 => {
+        let msg = parse_error_response(payload)
+        self.conn.drain_until_ready()
+        self.done = true
+        raise @moondb.QueryError(msg)
+      }
+      // 'Z' ReadyForQuery
+      90 => {
+        self.done = true
+        return None
+      }
+      // 'C' CommandComplete / 'S' ParameterStatus / others — keep reading
+      _ => ()
+    }
+  }
+}
+
+///|
+/// Abandon the stream early, draining any unread response to ReadyForQuery so the
+/// connection can run the next statement. Idempotent once the stream is done.
+pub async fn PgRowStream::close(self : PgRowStream) -> Unit raise DbError {
+  if !self.done {
+    self.conn.drain_until_ready()
+    self.done = true
+  }
 }
 
 ///|

@@ -65,6 +65,41 @@ async test "integration: connect, DDL, parameterised INSERT, SELECT round trip" 
 }
 
 ///|
+async test "integration: query_stream yields rows incrementally and matches query" {
+  guard @env.get_env_var("MOON_PG_TEST") is Some(_) else { return }
+  let conn = pg_open()
+  conn.execute("DROP TABLE IF EXISTS moon_pg_stream", []) |> ignore
+  conn.execute("CREATE TABLE moon_pg_stream (id int, name text)", []) |> ignore
+  for i in 1..<6 {
+    conn.execute("INSERT INTO moon_pg_stream VALUES (?, ?)", [
+      @moondb.Int(i),
+      @moondb.Text("n" + i.to_string()),
+    ])
+    |> ignore
+  }
+  // Pull rows one at a time; they arrive in order and match a buffered query.
+  let stream = conn.query_stream(
+    "SELECT id, name FROM moon_pg_stream ORDER BY id",
+    [],
+  )
+  let ids = []
+  for row = stream.next(); row is Some(r); row = stream.next() {
+    ids.push(r.int_by("id"))
+  }
+  assert_eq(ids, [1, 2, 3, 4, 5])
+  // The connection is reusable once the stream drains.
+  let again = conn.query("SELECT count(*) FROM moon_pg_stream", [])
+  assert_eq(again[0].int64(0), 5L)
+  // Early close: abandon a stream after one row, then run another statement.
+  let partial = conn.query_stream("SELECT id FROM moon_pg_stream ORDER BY id", [])
+  assert_eq(partial.next() is Some(_), true)
+  partial.close()
+  let reused = conn.query("SELECT count(*) FROM moon_pg_stream", [])
+  assert_eq(reused[0].int64(0), 5L)
+  conn.close()
+}
+
+///|
 async test "integration: transactions commit and roll back" {
   guard @env.get_env_var("MOON_PG_TEST") is Some(_) else { return }
   let conn = PgConn::connect(

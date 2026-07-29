@@ -183,3 +183,51 @@ async test "integration: MySQL transactions commit and roll back" {
   assert_eq(after_commit[0].int(0), 2)
   conn.close()
 }
+
+///|
+/// Streaming: query_stream reads rows off the wire one at a time. They must arrive
+/// in order and match a buffered query, and the connection must stay usable after
+/// the stream drains or is closed early.
+async test "integration: MySQL query_stream yields rows incrementally and matches query" {
+  guard @env.get_env_var("MYSQL_TEST") is Some(_) else { return }
+  let port = match @env.get_env_var("MYSQL_PORT") {
+    Some(p) => @string.parse_int(p[:]) catch { _ => 3306 }
+    None => 3306
+  }
+  let conn = MysqlConn::connect(
+    env_or("MYSQL_HOST", "127.0.0.1"),
+    port,
+    env_or("MYSQL_USER", "root"),
+    env_or("MYSQL_PASSWORD", "root"),
+    env_or("MYSQL_DB", "test"),
+  )
+  let _ = conn.execute("DROP TABLE IF EXISTS t_moon_stream", [])
+  let _ = conn.execute(
+    "CREATE TABLE t_moon_stream (id INT, name TEXT) ENGINE=InnoDB",
+    [],
+  )
+  for i in 1..<6 {
+    let _ = conn.execute("INSERT INTO t_moon_stream VALUES (?, ?)", [
+      @moondb.Int(i),
+      @moondb.Text("n" + i.to_string()),
+    ])
+  }
+  let stream = conn.query_stream(
+    "SELECT id, name FROM t_moon_stream ORDER BY id",
+    [],
+  )
+  let ids = []
+  for row = stream.next(); row is Some(r); row = stream.next() {
+    ids.push(r.int_by("id"))
+  }
+  assert_eq(ids, [1, 2, 3, 4, 5])
+  let again = conn.query("SELECT COUNT(*) FROM t_moon_stream", [])
+  assert_eq(again[0].int64(0), 5L)
+  // Early close then reuse the connection.
+  let partial = conn.query_stream("SELECT id FROM t_moon_stream ORDER BY id", [])
+  assert_eq(partial.next() is Some(_), true)
+  partial.close()
+  let reused = conn.query("SELECT COUNT(*) FROM t_moon_stream", [])
+  assert_eq(reused[0].int64(0), 5L)
+  conn.close()
+}
