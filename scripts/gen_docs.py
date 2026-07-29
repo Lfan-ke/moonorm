@@ -13,16 +13,20 @@ SECTIONS = [
      "placeholders, never spliced in, and subquery/CTE params keep SQL text order."),
     ("session", "session.mbt", "Execution layer",
      "An explicit Session over any @moondb.Driver: it runs built statements and "
-     "returns typed @moondb.Row values, with SAVEPOINT-based nested transactions, "
-     "optimistic-locked updates (modify_versioned raises LostUpdate on a stale "
-     "version), and eager relationship loading. moonorm owns no driver contract - "
-     "the seam is @moondb, so a Session drives moon-sqlite, a Postgres backend, or "
-     "MockDriver."),
+     "returns typed @moondb.Row values, with depth-tracked nested transactions "
+     "(begin_nested returns a named SAVEPOINT handle), isolation-level / read-only "
+     "transactions (begin_with renders SET TRANSACTION per dialect), optimistic-locked "
+     "updates (modify_versioned raises LostUpdate on a stale version), and eager "
+     "relationship loading including N+1-avoiding batch loads (load_batch / "
+     "load_one_batch). moonorm owns no driver contract - the seam is @moondb, so a "
+     "Session drives moon-sqlite, a Postgres backend, or MockDriver."),
     ("models", "models.mbt", "Models & relationships",
-     "The declarative model layer: typed columns, a Model[T] Row<->record mapper, "
-     "CREATE TABLE DDL, and foreign-key 1:N / N:1 relationships loaded explicitly "
-     "via session.load / session.load_one (the faithful attribute-interception "
-     "equivalent, as Diesel and GORM also make explicit)."),
+     "The declarative model layer: typed columns and Fields, a Model[T] Row<->record "
+     "mapper (built by hand or via from_fields from a field list, the shape moonctl "
+     "generates), CREATE TABLE DDL, and foreign-key 1:N / N:1 relationships loaded "
+     "explicitly via session.load / session.load_one and batched via load_batch (the "
+     "faithful attribute-interception equivalent, as Diesel and GORM also make "
+     "explicit)."),
     ("migrations", "migrations.mbt", "Schema migrations",
      "Versioned up/down migrations tracked in a schema_migrations table: a Migrator "
      "applies pending versions ascending, is idempotent on re-run, rolls back to a "

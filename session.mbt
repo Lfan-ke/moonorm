@@ -13,12 +13,24 @@
 /// `&@moondb.Driver` trait object, so one `Session` type drives every backend.
 pub struct Session {
   driver : &@moondb.Driver
+  // Currently open nested savepoints, so `begin_nested` can auto-name and track
+  // depth the way SQLAlchemy's `begin_nested()` does (the caller never spells a
+  // savepoint name). `sp_seq` only ever increases, giving each savepoint a name
+  // unique within the session even after earlier ones are released.
+  mut sp_depth : Int
+  mut sp_seq : Int
 }
 
 ///|
 /// Wrap a connected driver in a session.
 pub fn Session::new(driver : &@moondb.Driver) -> Session {
-  { driver, }
+  { driver, sp_depth: 0, sp_seq: 0 }
+}
+
+///|
+/// How many nested savepoints opened via `begin_nested` are currently active.
+pub fn Session::savepoint_depth(self : Session) -> Int {
+  self.sp_depth
 }
 
 ///|
@@ -206,6 +218,200 @@ pub fn Session::release(
 }
 
 ///|
+/// A nested transaction opened by `Session::begin_nested`, wrapping one SAVEPOINT
+/// whose name and depth the session tracks for you. It is the faithful equivalent
+/// of the object SQLAlchemy's `Session.begin_nested()` returns: finish it by
+/// `release`-ing (keep the work, merging it into the enclosing transaction) or
+/// `rollback`-ing (discard the work since the savepoint). Both are terminal and
+/// idempotent — calling either a second time is a no-op — and both decrement the
+/// session's savepoint depth.
+pub struct Savepoint {
+  sess : Session
+  name : String
+  depth : Int
+  mut finished : Bool
+}
+
+///|
+/// The generated SQL name of this savepoint.
+pub fn Savepoint::name(self : Savepoint) -> String {
+  self.name
+}
+
+///|
+/// This savepoint's nesting depth (1 for the outermost `begin_nested`, 2 for one
+/// opened inside it, and so on).
+pub fn Savepoint::depth(self : Savepoint) -> Int {
+  self.depth
+}
+
+///|
+/// Open a nested transaction — `SAVEPOINT <auto-name>` — and return a handle that
+/// tracks its name and depth, so callers never spell (or risk mis-spelling) a
+/// savepoint name. Nesting `begin_nested` inside another increases the depth; each
+/// handle's `release`/`rollback` brings it back down. This is the ergonomic,
+/// depth-tracked counterpart of the raw `savepoint`/`rollback_to`/`release` trio,
+/// mirroring SQLAlchemy's `begin_nested()`.
+///
+/// The generated name (`moonorm_sp_<n>`, `n` strictly increasing per session) is a
+/// bare identifier by construction, so it is injection-safe without a runtime check.
+pub fn Session::begin_nested(self : Session) -> Savepoint raise @moondb.DbError {
+  self.sp_seq = self.sp_seq + 1
+  let name = "moonorm_sp_" + self.sp_seq.to_string()
+  self.driver.execute("SAVEPOINT " + name, []) |> ignore
+  self.sp_depth = self.sp_depth + 1
+  { sess: self, name, depth: self.sp_depth, finished: false }
+}
+
+///|
+/// Release this savepoint (`RELEASE SAVEPOINT <name>`), keeping the work done since
+/// it opened and merging it into the enclosing transaction. Terminal and idempotent.
+/// The SQLAlchemy nested-transaction `commit()`.
+pub fn Savepoint::release(self : Savepoint) -> Unit raise @moondb.DbError {
+  if self.finished {
+    return
+  }
+  self.sess.driver.execute("RELEASE SAVEPOINT " + self.name, []) |> ignore
+  self.finished = true
+  self.sess.sp_depth = self.sess.sp_depth - 1
+}
+
+///|
+/// SQLAlchemy spells "keep the nested work" as `commit()`; this is the alias for
+/// [`release`].
+pub fn Savepoint::commit(self : Savepoint) -> Unit raise @moondb.DbError {
+  self.release()
+}
+
+///|
+/// Roll back and close this savepoint, discarding everything done since it opened
+/// while leaving the enclosing transaction intact. It issues `ROLLBACK TO SAVEPOINT`
+/// followed by `RELEASE SAVEPOINT`, so — like SQLAlchemy's nested `rollback()` — the
+/// savepoint is terminal afterwards and the depth drops. Terminal and idempotent.
+pub fn Savepoint::rollback(self : Savepoint) -> Unit raise @moondb.DbError {
+  if self.finished {
+    return
+  }
+  self.sess.driver.execute("ROLLBACK TO SAVEPOINT " + self.name, []) |> ignore
+  self.sess.driver.execute("RELEASE SAVEPOINT " + self.name, []) |> ignore
+  self.finished = true
+  self.sess.sp_depth = self.sess.sp_depth - 1
+}
+
+///|
+/// A SQL transaction isolation level, in the four-rung ANSI ladder from weakest to
+/// strongest. Passed via `TxOptions` to `Session::begin_with`, which renders the
+/// backend's `SET TRANSACTION` (or SQLite `PRAGMA`) statement.
+pub(all) enum IsolationLevel {
+  ReadUncommitted
+  ReadCommitted
+  RepeatableRead
+  Serializable
+} derive(Eq)
+
+///|
+/// The ANSI keyword for an isolation level (`"READ COMMITTED"`, `"SERIALIZABLE"`, …).
+pub fn IsolationLevel::keyword(self : IsolationLevel) -> String {
+  match self {
+    ReadUncommitted => "READ UNCOMMITTED"
+    ReadCommitted => "READ COMMITTED"
+    RepeatableRead => "REPEATABLE READ"
+    Serializable => "SERIALIZABLE"
+  }
+}
+
+///|
+/// Options for a transaction opened by `Session::begin_with`: an optional
+/// `isolation` level and a `read_only` flag. This is the explicit counterpart of
+/// SQLAlchemy's `connection.execution_options(isolation_level=…)` — a plain value the
+/// session renders into the backend's transaction-characteristics statement.
+pub(all) struct TxOptions {
+  isolation : IsolationLevel?
+  read_only : Bool
+}
+
+///|
+/// Transaction options with everything defaulted off (backend default isolation,
+/// read-write). Set what you need: `{ ..TxOptions::default(), isolation:
+/// Some(Serializable) }`.
+pub fn TxOptions::default() -> TxOptions {
+  { isolation: None, read_only: false }
+}
+
+///|
+/// Render these options into the statements that impose them for `dialect`. On
+/// PostgreSQL and MySQL that is `SET TRANSACTION ISOLATION LEVEL <level>` and/or `SET
+/// TRANSACTION READ ONLY`; on SQLite, which has no such statement, it is
+/// `PRAGMA read_uncommitted = 1` for the one weaker level it supports (every other
+/// level is SQLite's default serializable behaviour, so nothing is emitted) and
+/// `PRAGMA query_only = 1` for read-only. An empty result means the backend's
+/// defaults already satisfy the options.
+pub fn TxOptions::to_sql(self : TxOptions, dialect : Dialect) -> Array[String] {
+  let out : Array[String] = []
+  match dialect {
+    Sqlite => {
+      match self.isolation {
+        Some(ReadUncommitted) => out.push("PRAGMA read_uncommitted = 1")
+        _ => ()
+      }
+      if self.read_only {
+        out.push("PRAGMA query_only = 1")
+      }
+    }
+    _ => {
+      match self.isolation {
+        Some(level) =>
+          out.push("SET TRANSACTION ISOLATION LEVEL " + level.keyword())
+        None => ()
+      }
+      if self.read_only {
+        out.push("SET TRANSACTION READ ONLY")
+      }
+    }
+  }
+  out
+}
+
+///|
+/// Whether `dialect` wants the transaction-characteristics statements issued
+/// *before* `BEGIN` rather than after. MySQL's scopeless `SET TRANSACTION` configures
+/// the next transaction and must precede it; PostgreSQL's `SET TRANSACTION` runs
+/// inside the transaction, after `BEGIN`. SQLite's `PRAGMA`s are connection-level, so
+/// issuing them first is fine.
+fn tx_opts_before_begin(dialect : Dialect) -> Bool {
+  match dialect {
+    Postgres => false
+    _ => true
+  }
+}
+
+///|
+/// Begin a transaction with explicit isolation / read-only options. It brackets the
+/// driver's `begin` with the `SET TRANSACTION` (or `PRAGMA`) statements `opts`
+/// renders for `dialect`, ordered so each backend accepts them: before `BEGIN` for
+/// MySQL and SQLite, after `BEGIN` for PostgreSQL (see `TxOptions::to_sql`). `dialect`
+/// defaults to `Postgres`, whose `SET TRANSACTION ISOLATION LEVEL` spelling is the
+/// ANSI-standard one. Commit or roll back with the usual `commit`/`rollback`.
+pub fn Session::begin_with(
+  self : Session,
+  opts : TxOptions,
+  dialect? : Dialect = Postgres,
+) -> Unit raise @moondb.DbError {
+  let stmts = opts.to_sql(dialect)
+  if tx_opts_before_begin(dialect) {
+    for s in stmts {
+      self.driver.execute(s, []) |> ignore
+    }
+    self.driver.begin()
+  } else {
+    self.driver.begin()
+    for s in stmts {
+      self.driver.execute(s, []) |> ignore
+    }
+  }
+}
+
+///|
 /// Create the table backing `model` from its declared columns (see
 /// `Model::create_table_sql`). With `if_not_exists=true` the DDL is idempotent.
 pub fn[T] Session::create_table(
@@ -283,6 +489,92 @@ pub fn[S, T] Session::load_one(
   } else {
     Some(rel.target.map_row(rows[0]))
   }
+}
+
+///|
+/// Eagerly load a 1:N relationship for *many* sources in a single query, avoiding
+/// the N+1 problem. Naively calling `load` in a loop fires one SELECT per source;
+/// this instead issues one `SELECT … WHERE key_column IN (all the source keys)`,
+/// then buckets the fetched children back to their parents in memory. The return is
+/// index-aligned with `sources`: `result[i]` is the list of children whose foreign
+/// key matches `sources[i]`'s key (empty if none). This is the explicit equivalent
+/// of SQLAlchemy's `selectinload` eager strategy.
+///
+/// Children are matched to a source by comparing the child row's `key_column` value
+/// against the source's extracted key, so a source with no children yields an empty
+/// list and children are shared correctly when two sources happen to hold the same
+/// key. An empty `sources` returns an empty array without touching the database.
+pub fn[S, T] Session::load_batch(
+  self : Session,
+  sources : Array[S],
+  rel : Relation[S, T],
+) -> Array[Array[T]] raise @moondb.DbError {
+  let result : Array[Array[T]] = []
+  for _ in sources {
+    result.push([])
+  }
+  if sources.length() == 0 {
+    return result
+  }
+  let (sql, params) = rel.batch_query(sources).build()
+  let rows = self.driver.query(sql, params)
+  // Bucket every fetched child to the sources it belongs to. The child's foreign
+  // key lives in the row under `key_column`; a source claims the child when its
+  // extracted key equals that value.
+  for row in rows {
+    let child_key = match row.by_name(rel.key_column) {
+      Some(v) => v
+      None =>
+        raise @moondb.QueryError(
+          "batch load: fetched row has no column " + rel.key_column,
+        )
+    }
+    let record = rel.target.map_row(row)
+    for i = 0; i < sources.length(); i = i + 1 {
+      if rel.source_value(sources[i]) == child_key {
+        result[i].push(record)
+      }
+    }
+  }
+  result
+}
+
+///|
+/// Eagerly load a N:1 relationship for *many* sources in a single query — the
+/// to-one counterpart of `load_batch`. One `SELECT … WHERE key_column IN (…)` fetches
+/// every distinct parent; the return is index-aligned with `sources`, `result[i]`
+/// being `sources[i]`'s parent (`Some`) or `None` when there is no match. Avoids the
+/// N+1 that a per-source `load_one` loop would incur.
+pub fn[S, T] Session::load_one_batch(
+  self : Session,
+  sources : Array[S],
+  rel : Relation[S, T],
+) -> Array[T?] raise @moondb.DbError {
+  let result : Array[T?] = []
+  for _ in sources {
+    result.push(None)
+  }
+  if sources.length() == 0 {
+    return result
+  }
+  let (sql, params) = rel.batch_query(sources).build()
+  let rows = self.driver.query(sql, params)
+  for row in rows {
+    let parent_key = match row.by_name(rel.key_column) {
+      Some(v) => v
+      None =>
+        raise @moondb.QueryError(
+          "batch load: fetched row has no column " + rel.key_column,
+        )
+    }
+    let record = rel.target.map_row(row)
+    for i = 0; i < sources.length(); i = i + 1 {
+      if result[i] is None && rel.source_value(sources[i]) == parent_key {
+        result[i] = Some(record)
+      }
+    }
+  }
+  result
 }
 
 ///|

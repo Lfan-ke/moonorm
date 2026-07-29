@@ -78,6 +78,18 @@ struct SubCond {
 }
 
 ///|
+/// A `col IN (?, ?, …)` / `col NOT IN (?, …)` predicate over an explicit value list
+/// (as opposed to `SubCond`, whose right-hand side is a subquery). Each value binds
+/// as its own placeholder, so a set-membership filter — the workhorse of an
+/// N+1-avoiding batch load, `WHERE fk IN (all the parent keys)` — stays fully
+/// parameterised.
+struct InCond {
+  col : String
+  negated : Bool
+  vals : Array[Value]
+}
+
+///|
 /// A common table expression: `name AS (subquery)`. CTEs render in a single leading
 /// `WITH` clause and their bound parameters come first in the final params list,
 /// matching their leading position in the SQL text.
@@ -94,6 +106,7 @@ pub struct Select {
   cols : Array[String]
   joins : Array[JoinClause]
   conds : Array[Cond]
+  in_conds : Array[InCond]
   sub_conds : Array[SubCond]
   groups : Array[String]
   havings : Array[Cond]
@@ -111,6 +124,7 @@ pub fn select(table : String) -> Select {
     cols: [],
     joins: [],
     conds: [],
+    in_conds: [],
     sub_conds: [],
     groups: [],
     havings: [],
@@ -262,6 +276,36 @@ pub fn Select::where_not_in(
 }
 
 ///|
+/// Add a `col IN (?, ?, …)` predicate over an explicit list of values (ANDed with
+/// the rest). Every value binds as its own placeholder, never spliced — this is the
+/// set-membership filter a batch load issues to fetch the related rows of many
+/// parents in one round trip (`WHERE fk IN (key1, key2, …)`) instead of one query
+/// per parent. An empty `vals` renders `col IN (NULL)`, which matches nothing (the
+/// SQL-correct reading of "in the empty set"); callers with no keys should skip the
+/// query outright.
+pub fn Select::where_in_values(
+  self : Select,
+  col : String,
+  vals : Array[Value],
+) -> Select {
+  self.in_conds.push({ col, negated: false, vals })
+  self
+}
+
+///|
+/// Add a `col NOT IN (?, ?, …)` predicate over an explicit list of values (ANDed
+/// with the rest). See `where_in_values`; an empty `vals` renders `col NOT IN
+/// (NULL)`.
+pub fn Select::where_not_in_values(
+  self : Select,
+  col : String,
+  vals : Array[Value],
+) -> Select {
+  self.in_conds.push({ col, negated: true, vals })
+  self
+}
+
+///|
 pub fn Select::order_by(self : Select, col : String, ord : Order) -> Select {
   self.orders.push((col, ord))
   self
@@ -283,7 +327,8 @@ pub fn Select::offset(self : Select, n : Int) -> Select {
 /// Render to `(sql, params)`, with `?` placeholders for every bound value. Bound
 /// values appear in the params list in the same left-to-right order they occur in
 /// the SQL text: CTE subqueries first (the leading `WITH`), then the `WHERE` scalar
-/// predicates, then the `WHERE` subquery predicates, then `HAVING`.
+/// predicates, then the `WHERE` `IN (values)` predicates, then the `WHERE` subquery
+/// predicates, then `HAVING`.
 pub fn Select::build(self : Select) -> (String, Array[Value]) {
   let params : Array[Value] = []
   let mut sql = ""
@@ -306,11 +351,26 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
   for j in self.joins {
     sql = sql + " " + j.kind + " " + j.table + " ON " + j.on
   }
-  if self.conds.length() > 0 || self.sub_conds.length() > 0 {
+  if self.conds.length() > 0 ||
+    self.in_conds.length() > 0 ||
+    self.sub_conds.length() > 0 {
     let cparts : Array[String] = []
     for c in self.conds {
       cparts.push(c.col + " " + c.op + " ?")
       params.push(c.val)
+    }
+    for ic in self.in_conds {
+      let placeholders : Array[String] = []
+      if ic.vals.length() == 0 {
+        placeholders.push("NULL")
+      } else {
+        for v in ic.vals {
+          placeholders.push("?")
+          params.push(v)
+        }
+      }
+      let op = if ic.negated { "NOT IN" } else { "IN" }
+      cparts.push(ic.col + " " + op + " (" + join(placeholders, ", ") + ")")
     }
     for sc in self.sub_conds {
       let (sub_sql, sub_params) = sc.sub.build()

@@ -83,6 +83,48 @@ pub fn Column::ddl(self : Column) -> String {
 }
 
 ///|
+/// One field of a declarative model: a declared [`Column`] paired with the
+/// projection that reads the field's value out of a record `T`. A `Field` is the
+/// column metadata plus the "how to persist this one attribute" half of the mapping,
+/// factored to one place so a `Model` can be assembled from a list of fields rather
+/// than a hand-written `to_columns`.
+///
+/// This is the shape moonctl's `model` generator emits: from a `#orm`-annotated
+/// struct it produces one `field(...)` per attribute (the `encode` closure is a
+/// trivial projection like `h => Int(h.id)`), and a single `from_row` decoder. The
+/// generated `[Field]` array then drives the column list, the `CREATE TABLE` DDL,
+/// the `SELECT` projection, and the `INSERT` binding — everything except decoding a
+/// row back into `T`, which needs the record constructor MoonBit cannot synthesise
+/// without reflection (see [`Model::from_fields`]).
+pub struct Field[T] {
+  column : Column
+  encode : (T) -> Value
+}
+
+///|
+/// Declare a model field: its column metadata and the projection `encode` that
+/// pulls this field's [`Value`] out of a record. The column knobs (`primary_key`,
+/// `nullable`, `references`) mirror [`column`]; `encode` is the one-liner that
+/// binds the attribute, e.g. `field("id", IntType, primary_key=true, h =>
+/// Int(h.id))`.
+pub fn[T] field(
+  name : String,
+  col_type : ColumnType,
+  encode : (T) -> Value,
+  primary_key? : Bool = false,
+  nullable? : Bool = true,
+  references? : (String, String)? = None,
+) -> Field[T] {
+  { column: { name, col_type, primary_key, nullable, references }, encode }
+}
+
+///|
+/// The name of the column this field maps to.
+pub fn[T] Field::name(self : Field[T]) -> String {
+  self.column.name
+}
+
+///|
 /// A declarative model: the mapping between a database table and a MoonBit record
 /// type `T`. It bundles the `table` name, the ordered `columns`, and the two mapping
 /// closures that MoonBit cannot synthesise for want of reflection:
@@ -114,6 +156,48 @@ pub fn[T] Model::new(
   from_row : (@moondb.Row) -> T raise @moondb.DbError,
   to_columns : (T) -> Array[(String, Value)],
 ) -> Model[T] {
+  { table, columns, from_row, to_columns }
+}
+
+///|
+/// Build a `Model[T]` from a list of [`Field`]s and a single row decoder — the
+/// declarative path that removes the hand-written `to_columns`. The columns and the
+/// binding projection are both derived from `fields`: `columns` is each field's
+/// declared column, and `to_columns` maps a record to `(name, field.encode(record))`
+/// pairs. You still supply `from_row`, because reconstructing a `T` from a fetched
+/// row needs the record constructor, and MoonBit — lacking reflection — cannot
+/// synthesise it; that one closure is the irreducible core of the mapping.
+///
+/// This is the constructor moonctl-generated model metadata targets: the generator
+/// emits the `[Field]` array and the `from_row` decoder, and `from_fields` turns
+/// them into a live `Model`. Written by hand it reads just as directly:
+///
+/// ```
+/// Model::from_fields(
+///   "hero",
+///   [
+///     field("id", IntType, primary_key=true, h => Int(h.id)),
+///     field("name", TextType, nullable=false, h => Text(h.name)),
+///   ],
+///   r => { id: r.int(0), name: r.text(1) },
+/// )
+/// ```
+pub fn[T] Model::from_fields(
+  table : String,
+  fields : Array[Field[T]],
+  from_row : (@moondb.Row) -> T raise @moondb.DbError,
+) -> Model[T] {
+  let columns : Array[Column] = []
+  for f in fields {
+    columns.push(f.column)
+  }
+  let to_columns = fn(record : T) -> Array[(String, Value)] {
+    let out : Array[(String, Value)] = []
+    for f in fields {
+      out.push((f.column.name, (f.encode)(record)))
+    }
+    out
+  }
   { table, columns, from_row, to_columns }
 }
 
@@ -249,4 +333,43 @@ pub fn[S, T] belongs_to(
 /// query. `Session::load` runs this and maps the rows.
 pub fn[S, T] Relation::query(self : Relation[S, T], source : S) -> Select {
   self.target.select().where_(self.key_column, "=", (self.source_key)(source))
+}
+
+///|
+/// The single `Select` that resolves this relationship for *many* sources at once:
+/// the target model's projection filtered to `key_column IN (k1, k2, …)`, where the
+/// keys are the distinct values extracted from `sources`. This is the query behind
+/// an N+1-avoiding batch load — one round trip fetches the related rows of every
+/// source, instead of one `query(source)` per source. Every key binds as its own
+/// placeholder. With no sources the result filters on the empty set (`IN (NULL)`),
+/// matching nothing; `Session::load_batch` short-circuits that case without a query.
+/// The source-side key this relationship extracts from a `source` record — the
+/// value the target's `key_column` is matched against. Exposed so a batch load can
+/// bucket fetched rows back to their sources.
+pub fn[S, T] Relation::source_value(self : Relation[S, T], source : S) -> Value {
+  (self.source_key)(source)
+}
+
+///|
+pub fn[S, T] Relation::batch_query(
+  self : Relation[S, T],
+  sources : Array[S],
+) -> Select {
+  let keys : Array[Value] = []
+  for s in sources {
+    let k = (self.source_key)(s)
+    // Distinct keys only: several sources may share one foreign key, and the IN
+    // list needs each key once.
+    let mut seen = false
+    for existing in keys {
+      if existing == k {
+        seen = true
+        break
+      }
+    }
+    if !seen {
+      keys.push(k)
+    }
+  }
+  self.target.select().where_in_values(self.key_column, keys)
 }

@@ -14,6 +14,17 @@ fn[D : Driver] insert_then_read(
 }
 
 ///|
+test "driver ping: default probe succeeds on a live connection, fails on a closed one" {
+  let db = MockDriver::new()
+  // The default ping runs `SELECT 1`; the mock answers, so a live connection pings.
+  assert_eq(db.ping(), true)
+  db.close()
+  // On a closed connection the probe's query raises, which the default swallows
+  // into a plain `false` rather than propagating.
+  assert_eq(db.ping(), false)
+}
+
+///|
 test "mock driver stores on execute and echoes on query" {
   let db = MockDriver::new()
   let rows = insert_then_read(db, [Int(1), Text("a")])

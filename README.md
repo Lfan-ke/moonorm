@@ -140,6 +140,60 @@ let team = sess.load_one({ id: 10, name: "iron-man", team_id: 1 }, parent)  // S
 The relationship's match value is bound, never spliced, so eager loading is
 injection-safe like every other query.
 
+### Declarative models from a field list
+
+Writing `to_columns` by hand repeats what the columns already say. `Model::from_fields`
+takes that other half off you: give it a list of `field`s — each a column plus the
+one-line projection that reads it off a record — and it derives the column list, the
+`CREATE TABLE` DDL, the `SELECT` projection, and the `INSERT` binding. You still supply
+`from_row`, because turning a fetched row back into a `T` needs the record constructor,
+and MoonBit — with no reflection — cannot synthesise it; that one closure is the
+irreducible core of the mapping. This is exactly the shape `moonctl`'s `model` generator
+emits from an `#orm`-annotated struct — a `[field(...)]` array and a `from_row`:
+
+```moonbit
+let heroes : @moonorm.Model[Hero] = @moonorm.Model::from_fields(
+  "heroes",
+  [
+    @moonorm.field("id", @moonorm.IntType, (h : Hero) => @moondb.Int(h.id), primary_key=true),
+    @moonorm.field("name", @moonorm.TextType, (h : Hero) => @moondb.Text(h.name), nullable=false),
+    @moonorm.field("team_id", @moonorm.IntType, (h : Hero) => @moondb.Int(h.team_id),
+                   references=Some(("teams", "id"))),
+  ],
+  (r) => { id: r.int(0), name: r.text(1), team_id: r.int(2) },   // the one closure that stays
+)
+```
+
+### Batch loading (avoiding N+1)
+
+Calling `load` once per parent is the N+1 trap — one SELECT per row. `load_batch` fetches
+the children of *many* parents in a single `WHERE fk IN (…)` round trip and buckets them
+back, index-aligned with the sources you passed. `load_one_batch` is the N:1 counterpart.
+This is the explicit equivalent of SQLAlchemy's `selectinload`:
+
+```moonbit
+let children = @moonorm.has_many(heroes, "team_id", (t : Team) => @moondb.Int(t.id))
+let teams : Array[Team] = [{ id: 1, name: "avengers" }, { id: 2, name: "x-men" }]
+let grouped = sess.load_batch(teams, children)   // one query; grouped[0] = avengers' heroes, …
+```
+
+### Nested transactions & isolation
+
+`begin_nested` opens a SAVEPOINT and hands back a handle that names and depth-tracks it
+for you (SQLAlchemy's `Session.begin_nested()`): finish it with `release` to keep the work
+or `rollback` to discard it back to the savepoint, both terminal and idempotent. For an
+isolation level or a read-only transaction, `begin_with` renders the backend's
+`SET TRANSACTION` (or SQLite `PRAGMA`) and orders it correctly around `BEGIN` per dialect:
+
+```moonbit
+let sp = sess.begin_nested()          // SAVEPOINT moonorm_sp_1; sess.savepoint_depth() == 1
+sess.add(insert_stmt) |> ignore
+sp.rollback()                         // undo just this savepoint's work; depth back to 0
+
+sess.begin_with({ isolation: Some(@moonorm.Serializable), read_only: false }, dialect=@moonorm.Postgres)
+// BEGIN; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE
+```
+
 ### Design & boundaries (honest)
 
 - **Explicit, not magic.** SQLAlchemy issues SQL implicitly when you touch a
@@ -221,7 +275,7 @@ Verified across all backends (`wasm`, `wasm-gc`, `js`, `native`) in CI, 0 warnin
 
 ## Roadmap (transliterating SQLAlchemy)
 
-`select` / `insert` / `update` / `delete` with WHERE / ORDER BY / LIMIT / OFFSET, inner/left `JOIN`, `GROUP BY` / `HAVING`, aggregate columns (`count()` / `raw()`), `WITH` CTEs, `IN (subquery)` predicates, window functions (`OVER (PARTITION BY … ORDER BY …)`), dialect-aware `RETURNING` and upsert (`ON CONFLICT … DO UPDATE` / `ON DUPLICATE KEY UPDATE`), and a `Table` descriptor are all here — and they **execute** against any `@moondb.Driver` via an explicit `Session` (`add` / `fetch` / `modify` / `remove` / `commit` / `rollback`, optimistic-locked updates, plus models, eager-loaded relationships, and versioned migrations). Connection pooling lives in [`moondb`](https://github.com/Lfan-ke/moonorm) as `Pool[D]` (idle reuse, a size ceiling, close-all). The native SQLite backend is [`moon-sqlite`](https://github.com/Lfan-ke/moon-sqlite); Postgres and MySQL/MariaDB backends live in [`moon-postgres`](https://github.com/Lfan-ke/moon-postgres) and [`moon-mysql`](https://github.com/Lfan-ke/moon-mysql). Still to come: `#orm`-annotated models with `moonctl`-generated table metadata and Row↔struct mapping.
+`select` / `insert` / `update` / `delete` with WHERE / ORDER BY / LIMIT / OFFSET, inner/left `JOIN`, `GROUP BY` / `HAVING`, aggregate columns (`count()` / `raw()`), `WITH` CTEs, `IN (subquery)` and `IN (values)` predicates, window functions (`OVER (PARTITION BY … ORDER BY …)`), dialect-aware `RETURNING` and upsert (`ON CONFLICT … DO UPDATE` / `ON DUPLICATE KEY UPDATE`), and a `Table` descriptor are all here — and they **execute** against any `@moondb.Driver` via an explicit `Session` (`add` / `fetch` / `modify` / `remove` / `commit` / `rollback`, optimistic-locked updates, isolation-level and read-only transactions via `begin_with`, depth-tracked nested savepoints via `begin_nested`, plus declarative models — hand-built or `from_fields` from `moonctl`-generated metadata — eager-loaded relationships with N+1-avoiding batch loading, and versioned migrations). Connection pooling lives in [`moondb`](https://github.com/Lfan-ke/moonorm) as `Pool[D]`: idle reuse, a size ceiling, a `pre_ping` health probe that evicts dead connections on acquire, `max_lifetime` recycling, a non-blocking `try_acquire`, and close-all. The native SQLite backend is [`moon-sqlite`](https://github.com/Lfan-ke/moon-sqlite); Postgres and MySQL/MariaDB backends live in [`moon-postgres`](https://github.com/Lfan-ke/moon-postgres) and [`moon-mysql`](https://github.com/Lfan-ke/moon-mysql). Still to come: Alembic-style schema-diff migrations reflected from a live database, and multiple-inheritance / polymorphic mapping.
 
 ## License
 

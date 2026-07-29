@@ -54,7 +54,8 @@ moon add Lfan-ke/moondb
 | [`Row`](#row) | one result row: aligned column names + `Value`s, with typed accessors | `sql.Rows` / DB-API row tuple |
 | [`ExecResult`](#execresult) | outcome of a non-query: rows affected + last insert id | Go `sql.Result`, DB-API `rowcount`/`lastrowid` |
 | [`DbError`](#dberror) | the one error every operation raises | DB-API exception hierarchy (flattened) |
-| [`Driver`](#driver) | the trait a backend implements / a query layer targets | Go `driver.Conn`+`Execer`+`Queryer` |
+| [`Driver`](#driver) | the trait a backend implements / a query layer targets (with a default `ping` health probe) | Go `driver.Conn`+`Execer`+`Queryer`+`Pinger` |
+| [`Pool`](#pool) | a fixed-ceiling connection pool over any `Driver` | Go `sql.DB` pool, SQLAlchemy `QueuePool` |
 | [`MockDriver`](#mockdriver) | dependency-free in-memory reference driver, for tests | — |
 
 ### The binding contract
@@ -107,6 +108,7 @@ pub impl @moondb.Driver for MyConn with execute(self, sql, params) {
 - **Why raise, not `Result`.** Typed accessors and driver calls `raise DbError` rather than returning `Result[_, DbError]`, so a decode bug or a dropped connection surfaces at the call site instead of being silently swallowed. A caller opts into recovery with `try`/`catch`.
 - **Typed accessors are strict.** `row.int(i)` raises `TypeError` if the cell is not an integer — including when it is `NULL`. Guard nullable columns with `is_null` first. Integer→integer and integer→double conversions are allowed and lossless; `int` narrows an `Int64` and says so.
 - **`DbError` is `pub(all)`.** A plain `pub suberror` can be *caught* from another package but not *constructed* — which would stop out-of-tree drivers from raising it. `pub(all)` opens the constructors.
+- **The pool is synchronous.** `Pool[D]` reuses idle connections under a size ceiling, evicts a connection that fails its `pre_ping` probe or outlives `max_lifetime` (age measured by an injected `clock`, the way `database/sql` swaps `nowFunc` in tests), and offers a non-blocking `try_acquire`. Because moondb's base contract is sync and the pure backends have no threads, an exhausted `acquire` fails immediately rather than blocking — the `acquire_timeout` is the budget an async driver layers real waiting on top of. `ping` is a default `Driver` method (`SELECT 1`), so every driver gets a health probe for free.
 
 ## Roadmap
 
@@ -119,7 +121,7 @@ v0.1 fixes the smallest contract that a relational backend and a query layer bot
 
 ## Tests
 
-Nineteen tests cover the value model, every typed accessor and its error path, the error type, and the reference driver — including real transaction rollback/commit semantics, verified by mutation (breaking `rollback` turns the transaction tests red). They run on all four backends:
+The suite covers the value model, every typed accessor and its error path, the error type, the reference driver — including real transaction rollback/commit semantics — and the connection pool. Key behaviours are mutation-verified: breaking `rollback` turns the transaction tests red, and disabling the pool's `pre_ping` eviction or its `max_lifetime` retirement turns the corresponding pool tests red. They run on all four backends:
 
 ```bash
 moon test --target all

@@ -47,4 +47,25 @@ pub(open) trait Driver {
   fn rollback(Self) -> Unit raise DbError
   /// Release the underlying connection (best-effort, idempotent).
   fn close(Self) -> Unit
+  /// Cheaply check the connection is still usable — the liveness probe a pool runs
+  /// before handing an idle connection back (SQLAlchemy's `pool_pre_ping`, Go's
+  /// `driver.Pinger`). It returns `false` rather than raising, so a broken
+  /// connection is a plain "unhealthy" verdict the caller can act on. The default
+  /// issues the universally accepted `SELECT 1` and reports whether it round-trips;
+  /// a driver whose backend has a cheaper heartbeat (or none) overrides it.
+  fn ping(Self) -> Bool = _
+}
+
+///|
+/// Default `ping`: run `SELECT 1` and report success. Any failure — a dropped
+/// socket, a closed handle, a protocol error — is swallowed into `false` so the
+/// probe never raises. `SELECT 1` is a no-side-effect statement every SQL backend
+/// accepts, which is exactly why connection pools use it as their heartbeat.
+impl Driver with fn ping(self : Self) -> Bool {
+  try {
+    self.query("SELECT 1", []) |> ignore
+    true
+  } catch {
+    _ => false
+  }
 }
