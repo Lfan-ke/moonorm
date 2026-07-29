@@ -195,3 +195,49 @@ fn sort_by_version(
   }
   out
 }
+
+///|
+/// Map a SQLite declared type keyword back to a `ColumnType` (the inverse of
+/// `ColumnType::sql`). Unknown affinities fall back to `TextType`.
+fn coltype_of(kw : String) -> ColumnType {
+  match kw {
+    "INTEGER" => IntType
+    "TEXT" => TextType
+    "REAL" => RealType
+    "BLOB" => BlobType
+    _ => TextType
+  }
+}
+
+///|
+/// Parse `PRAGMA table_info` rows into `Column`s — the reflection core, testable
+/// without a live database. The pragma projects, in order, `cid, name, type,
+/// notnull, dflt_value, pk`; a non-zero `pk` marks the primary key and `notnull`
+/// its NOT NULL. This is the read half of Alembic-style autogenerate: compare the
+/// reflected columns against a `Model`'s declared columns to diff a schema.
+pub fn reflect_columns(
+  rows : Array[@moondb.Row],
+) -> Array[Column] raise @moondb.DbError {
+  let cols = []
+  for r in rows {
+    cols.push(
+      column(
+        r.text(1),
+        coltype_of(r.text(2)),
+        primary_key=r.int(5) != 0,
+        nullable=r.int(3) == 0,
+      ),
+    )
+  }
+  cols
+}
+
+///|
+/// Reflect a table's columns off a live connection: run `PRAGMA table_info` and
+/// parse it. The thin driver wrapper over `reflect_columns`.
+pub fn reflect_table(
+  driver : &@moondb.Driver,
+  table : String,
+) -> Array[Column] raise @moondb.DbError {
+  reflect_columns(driver.query("PRAGMA table_info(" + table + ")", []))
+}
