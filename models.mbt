@@ -70,11 +70,13 @@ pub fn column(
 /// that keyword; a non-nullable column emits `NOT NULL`; a `references` target
 /// emits a `REFERENCES table(column)` clause. Column and table names are trusted
 /// identifiers declared in code, never bound values.
-pub fn Column::ddl(self : Column) -> String {
+pub fn Column::ddl(self : Column, inline_pk? : Bool = true) -> String {
   let mut s = self.name + " " + self.col_type.sql()
-  if self.primary_key {
+  if self.primary_key && inline_pk {
     s = s + " PRIMARY KEY"
-  } else if !self.nullable {
+  } else if self.primary_key || !self.nullable {
+    // A primary-key column is NOT NULL; when the key is a table-level constraint
+    // (composite key, `inline_pk=false`) the column still carries NOT NULL.
     s = s + " NOT NULL"
   }
   if self.unique && !self.primary_key {
@@ -253,9 +255,17 @@ pub fn[T] Model::create_table_sql(
   } else {
     "CREATE TABLE "
   }
+  let pks = self.columns.filter(fn(c) { c.primary_key })
+  // A single primary key stays inline (`id INTEGER PRIMARY KEY`); a composite key
+  // becomes a table-level `PRIMARY KEY (a, b)` constraint, since SQL allows only one
+  // inline PRIMARY KEY per table.
+  let composite = pks.length() > 1
   let defs : Array[String] = []
   for c in self.columns {
-    defs.push(c.ddl())
+    defs.push(c.ddl(inline_pk=!composite))
+  }
+  if composite {
+    defs.push("PRIMARY KEY (" + join(pks.map(fn(c) { c.name }), ", ") + ")")
   }
   head + self.table + " (" + join(defs, ", ") + ")"
 }
