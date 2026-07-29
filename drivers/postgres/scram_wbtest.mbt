@@ -43,3 +43,22 @@ test "SCRAM-SHA-256 reproduces the RFC 7677 example vectors" {
     "6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=",
   )
 }
+
+///|
+test "scram_client_final produces the RFC 7677 client-final and server signature" {
+  let (client_final, server_sig) = scram_client_final(
+    b"pencil", "n=user,r=rOprNGfwEbeRWgbNEkqO", "r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096",
+  )
+  assert_eq(
+    client_final, "c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=",
+  )
+  assert_eq(
+    base64_encode(server_sig),
+    "6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=",
+  )
+  // base64 round-trips the known salt.
+  assert_eq(
+    base64_encode(base64_decode("W22ZaJ0SNY7soEsUEjb6gQ==")),
+    "W22ZaJ0SNY7soEsUEjb6gQ==",
+  )
+}

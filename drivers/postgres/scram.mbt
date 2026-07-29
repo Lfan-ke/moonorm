@@ -125,11 +125,7 @@ pub fn hmac_sha256(key : Bytes, msg : Bytes) -> Bytes {
 ///|
 /// PBKDF2-HMAC-SHA256 producing a 32-byte key (SCRAM's `Hi`, dkLen = hLen so only the
 /// first block is computed): T = U1 ^ U2 ^ … ^ Uc, U1 = HMAC(pw, salt‖INT32(1)).
-pub fn pbkdf2_sha256(
-  password : Bytes,
-  salt : Bytes,
-  iterations : Int,
-) -> Bytes {
+pub fn pbkdf2_sha256(password : Bytes, salt : Bytes, iterations : Int) -> Bytes {
   let first = Buffer()
   first.write_bytes(salt[:])
   first.write_byte(b'\x00')
@@ -195,10 +191,7 @@ pub fn base64_encode(data : Bytes) -> String {
 /// The SCRAM ClientProof for the AuthMessage: `ClientKey XOR HMAC(StoredKey,
 /// AuthMessage)`, where ClientKey = HMAC(SaltedPassword, "Client Key") and
 /// StoredKey = SHA256(ClientKey) (RFC 5802 §3).
-pub fn scram_client_proof(
-  salted : Bytes,
-  auth_message : Bytes,
-) -> Bytes {
+pub fn scram_client_proof(salted : Bytes, auth_message : Bytes) -> Bytes {
   let client_key = hmac_sha256(salted, b"Client Key")
   let stored_key = sha256(client_key)
   let client_sig = hmac_sha256(stored_key, auth_message)
@@ -213,9 +206,90 @@ pub fn scram_client_proof(
 /// The SCRAM ServerSignature: `HMAC(ServerKey, AuthMessage)`, ServerKey =
 /// HMAC(SaltedPassword, "Server Key"). The client verifies the server's `v=` against
 /// this to authenticate the server (RFC 5802 §3).
-pub fn scram_server_signature(
-  salted : Bytes,
-  auth_message : Bytes,
-) -> Bytes {
+pub fn scram_server_signature(salted : Bytes, auth_message : Bytes) -> Bytes {
   hmac_sha256(hmac_sha256(salted, b"Server Key"), auth_message)
+}
+
+///|
+fn b64_val(c : Int) -> Int {
+  if c >= 65 && c <= 90 {
+    c - 65
+  } else if c >= 97 && c <= 122 {
+    c - 97 + 26
+  } else if c >= 48 && c <= 57 {
+    c - 48 + 52
+  } else if c == 43 {
+    62
+  } else if c == 47 {
+    63
+  } else {
+    -1
+  }
+}
+
+///|
+/// Standard base64 decode (RFC 4648); `=` padding is ignored.
+pub fn base64_decode(s : String) -> Bytes {
+  let chars = s.to_array()
+  let out = Buffer()
+  let mut i = 0
+  while i + 4 <= chars.length() {
+    let c0 = b64_val(chars[i].to_int())
+    let c1 = b64_val(chars[i + 1].to_int())
+    let c2 = b64_val(chars[i + 2].to_int())
+    let c3 = b64_val(chars[i + 3].to_int())
+    out.write_byte(((c0 << 2) | (c1 >> 4)).to_byte())
+    if c2 >= 0 {
+      out.write_byte((((c1 & 0xf) << 4) | (c2 >> 2)).to_byte())
+    }
+    if c3 >= 0 {
+      out.write_byte((((c2 & 0x3) << 6) | c3).to_byte())
+    }
+    i = i + 4
+  }
+  out.to_bytes()
+}
+
+///|
+fn atoi(s : String) -> Int {
+  let mut n = 0
+  for c in s {
+    n = n * 10 + (c.to_int() - 48)
+  }
+  n
+}
+
+///|
+/// Build the SCRAM client-final message and the expected server signature from the
+/// server's first message (RFC 5802). `client_first_bare` is `n=…,r=clientnonce`;
+/// `server_first` is `r=nonce,s=salt,i=iters`. Returns `(client_final_message,
+/// server_signature)` — the client sends the first and verifies the server's `v=`
+/// against the base64 of the second.
+pub fn scram_client_final(
+  password : Bytes,
+  client_first_bare : String,
+  server_first : String,
+) -> (String, Bytes) {
+  let mut nonce = ""
+  let mut salt_b64 = ""
+  let mut iters = 0
+  for part in server_first.split(",") {
+    if part.has_prefix("r=") {
+      nonce = part[2:].to_owned()
+    } else if part.has_prefix("s=") {
+      salt_b64 = part[2:].to_owned()
+    } else if part.has_prefix("i=") {
+      iters = atoi(part[2:].to_owned())
+    }
+  }
+  let salted = pbkdf2_sha256(password, base64_decode(salt_b64), iters)
+  let client_final_wo = "c=biws,r=" + nonce
+  let auth = @utf8.encode(
+    client_first_bare + "," + server_first + "," + client_final_wo,
+  )
+  let proof = scram_client_proof(salted, auth)
+  (
+    client_final_wo + ",p=" + base64_encode(proof),
+    scram_server_signature(salted, auth),
+  )
 }
