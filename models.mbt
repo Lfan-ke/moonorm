@@ -19,6 +19,16 @@ pub(all) enum ColumnType {
   RealType
   BlobType
   BoolType
+  // SQLModel's everyday field types beyond the storage affinities. `VarcharType(n)`
+  // carries a length; the rest declare a type SQLite tolerates and that a dialect
+  // renders natively (see `ColumnType::sql`). UUID/JSON store as TEXT on SQLite.
+  VarcharType(Int)
+  NumericType
+  DateTimeType
+  DateType
+  TimeType
+  UuidType
+  JsonType
 } derive(Eq)
 
 ///|
@@ -30,6 +40,15 @@ fn ColumnType::sql(self : ColumnType) -> String {
     TextType => "TEXT"
     RealType => "REAL"
     BlobType => "BLOB"
+    VarcharType(n) => "VARCHAR(" + n.to_string() + ")"
+    NumericType => "NUMERIC"
+    DateTimeType => "DATETIME"
+    DateType => "DATE"
+    TimeType => "TIME"
+    // SQLite has no native UUID/JSON storage class; they live as TEXT (a dialect
+    // renders UUID / JSONB natively — see sql_for).
+    UuidType => "TEXT"
+    JsonType => "TEXT"
   }
 }
 

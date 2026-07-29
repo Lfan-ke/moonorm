@@ -205,6 +205,10 @@ fn coltype_of(kw : String) -> ColumnType {
     "TEXT" => TextType
     "REAL" => RealType
     "BLOB" => BlobType
+    "NUMERIC" => NumericType
+    "DATETIME" => DateTimeType
+    "DATE" => DateType
+    "TIME" => TimeType
     _ => TextType
   }
 }
