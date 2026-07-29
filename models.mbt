@@ -45,6 +45,9 @@ pub(all) struct Column {
   primary_key : Bool
   nullable : Bool
   unique : Bool
+  // A DDL `DEFAULT` expression (SQLAlchemy `server_default`), e.g. `"0"` or
+  // `"CURRENT_TIMESTAMP"`. A trusted SQL literal, emitted verbatim, never bound.
+  default : String?
   references : (String, String)?
 }
 
@@ -59,9 +62,10 @@ pub fn column(
   primary_key? : Bool = false,
   nullable? : Bool = true,
   unique? : Bool = false,
+  default? : String? = None,
   references? : (String, String)? = None,
 ) -> Column {
-  { name, col_type, primary_key, nullable, unique, references }
+  { name, col_type, primary_key, nullable, unique, default, references }
 }
 
 ///|
@@ -81,6 +85,9 @@ pub fn Column::ddl(self : Column, inline_pk? : Bool = true) -> String {
   }
   if self.unique && !self.primary_key {
     s = s + " UNIQUE"
+  }
+  if self.default is Some(expr) {
+    s = s + " DEFAULT " + expr
   }
   match self.references {
     Some((t, c)) => s = s + " REFERENCES " + t + "(" + c + ")"
@@ -121,10 +128,19 @@ pub fn[T] field(
   primary_key? : Bool = false,
   nullable? : Bool = true,
   unique? : Bool = false,
+  default? : String? = None,
   references? : (String, String)? = None,
 ) -> Field[T] {
   {
-    column: { name, col_type, primary_key, nullable, unique, references },
+    column: {
+      name,
+      col_type,
+      primary_key,
+      nullable,
+      unique,
+      default,
+      references,
+    },
     encode,
   }
 }
