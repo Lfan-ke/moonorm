@@ -305,3 +305,116 @@ pub fn index_ddl(
   let kw = if unique { "CREATE UNIQUE INDEX " } else { "CREATE INDEX " }
   kw + name + " ON " + table + " (" + join(columns, ", ") + ")"
 }
+
+///|
+/// Map a PostgreSQL `information_schema.columns.data_type` back to a `ColumnType`.
+fn coltype_of_pg(ty : String) -> ColumnType {
+  match ty {
+    "integer" | "bigint" | "smallint" => IntType
+    "boolean" => BoolType
+    "double precision" | "real" => RealType
+    "bytea" => BlobType
+    "numeric" => NumericType
+    "timestamp without time zone" | "timestamp with time zone" | "timestamp" =>
+      DateTimeType
+    "date" => DateType
+    "time without time zone" | "time" => TimeType
+    "uuid" => UuidType
+    "jsonb" | "json" => JsonType
+    _ => TextType
+  }
+}
+
+///|
+/// Map a MySQL column `Type` (e.g. `int`, `varchar(255)`, `tinyint(1)`) back to a
+/// `ColumnType`. Matched on the base keyword, most specific first.
+fn coltype_of_mysql(ty : String) -> ColumnType {
+  if ty.has_prefix("tinyint(1)") {
+    BoolType
+  } else if ty.has_prefix("int") ||
+    ty.has_prefix("bigint") ||
+    ty.has_prefix("smallint") ||
+    ty.has_prefix("tinyint") {
+    IntType
+  } else if ty.has_prefix("varchar") || ty.has_prefix("char") {
+    TextType
+  } else if ty.has_prefix("text") {
+    TextType
+  } else if ty.has_prefix("double") || ty.has_prefix("float") {
+    RealType
+  } else if ty.has_prefix("blob") {
+    BlobType
+  } else if ty.has_prefix("decimal") || ty.has_prefix("numeric") {
+    NumericType
+  } else if ty.has_prefix("datetime") || ty.has_prefix("timestamp") {
+    DateTimeType
+  } else if ty.has_prefix("date") {
+    DateType
+  } else if ty.has_prefix("time") {
+    TimeType
+  } else if ty.has_prefix("json") {
+    JsonType
+  } else {
+    TextType
+  }
+}
+
+///|
+/// Parse PostgreSQL `information_schema.columns` rows (`column_name`, `data_type`,
+/// `is_nullable`) into `Column`s — the PG counterpart of `reflect_columns`.
+pub fn reflect_columns_pg(
+  rows : Array[@moondb.Row],
+) -> Array[Column] raise @moondb.DbError {
+  let cols = []
+  for r in rows {
+    cols.push(
+      column(r.text(0), coltype_of_pg(r.text(1)), nullable=r.text(2) == "YES"),
+    )
+  }
+  cols
+}
+
+///|
+/// Parse MySQL `SHOW COLUMNS` rows (`Field`, `Type`, `Null`, `Key`, `Default`,
+/// `Extra`) into `Column`s, recovering the primary key (`Key == "PRI"`) and
+/// autoincrement (`Extra` contains `auto_increment`).
+pub fn reflect_columns_mysql(
+  rows : Array[@moondb.Row],
+) -> Array[Column] raise @moondb.DbError {
+  let cols = []
+  for r in rows {
+    cols.push(
+      column(
+        r.text(0),
+        coltype_of_mysql(r.text(1)),
+        nullable=r.text(2) == "YES",
+        primary_key=r.text(3) == "PRI",
+        autoincrement=r.text(5).contains("auto_increment"),
+      ),
+    )
+  }
+  cols
+}
+
+///|
+/// Reflect a table's columns off a live connection for a specific `Dialect`: SQLite
+/// via `PRAGMA table_info`, PostgreSQL via `information_schema.columns`, MySQL via
+/// `SHOW COLUMNS`. The multi-dialect counterpart of `reflect_table`.
+pub fn reflect_table_for(
+  driver : &@moondb.Driver,
+  table : String,
+  dialect : Dialect,
+) -> Array[Column] raise @moondb.DbError {
+  match dialect {
+    Sqlite => reflect_table(driver, table)
+    Postgres =>
+      reflect_columns_pg(
+        driver.query(
+          "SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = ? ORDER BY ordinal_position",
+          [Text(table)],
+        ),
+      )
+    Mysql =>
+      reflect_columns_mysql(driver.query("SHOW COLUMNS FROM " + table, []))
+  }
+}
