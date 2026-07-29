@@ -39,6 +39,12 @@ pub(open) trait Driver {
   fn execute(Self, String, Array[Value]) -> ExecResult raise DbError
   /// Run a row-returning statement with bound `params`; materialise every row.
   fn query(Self, String, Array[Value]) -> Array[Row] raise DbError
+  /// Stream a row-returning statement's rows through a [`Cursor`] instead of
+  /// materialising them — the bounded-memory counterpart to `query`, for large
+  /// results (SQLAlchemy's `stream_results`). The default wraps `query`'s array in
+  /// an [`ArrayCursor`]; a driver with incremental fetch overrides it with a live
+  /// cursor over its prepared statement or wire.
+  fn query_stream(Self, String, Array[Value]) -> &Cursor raise DbError = _
   /// Begin an explicit transaction.
   fn begin(Self) -> Unit raise DbError
   /// Commit the current transaction.
@@ -68,4 +74,17 @@ impl Driver with fn ping(self : Self) -> Bool {
   } catch {
     _ => false
   }
+}
+
+///|
+/// Default `query_stream`: materialise via `query`, then hand back an
+/// [`ArrayCursor`] over the result. It honours the [`Cursor`] interface (rows are
+/// pulled one at a time) without the memory bound a native incremental cursor
+/// gives; a driver that can fetch rows lazily overrides this.
+impl Driver with fn query_stream(
+  self : Self,
+  sql : String,
+  params : Array[Value],
+) -> &Cursor raise DbError {
+  ArrayCursor::new(self.query(sql, params))
 }
