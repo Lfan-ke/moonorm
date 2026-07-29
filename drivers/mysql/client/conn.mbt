@@ -61,17 +61,15 @@ async fn MysqlConn::write_packet(
 }
 
 ///|
-/// Open a connection to `host:port` and complete a mysql_native_password
-/// handshake against `user`/`password`, selecting `database` (empty for none).
-/// Works against both MySQL and MariaDB (the reported dialect is on
-/// [`server_kind`]).
+/// Open a connection to `host:port` and complete the auth handshake against
+/// `user`/`password`, selecting `database` (empty for none). Works against both
+/// MySQL and MariaDB (the reported dialect is on [`server_kind`]).
 ///
-/// If the server's default plugin is not native but it offers pluggable auth, the
-/// client advertises mysql_native_password and answers the server's
-/// AuthSwitchRequest to it — the down-negotiation MariaDB may require. A switch to
-/// any other plugin, or a caching_sha2_password full-auth (`0x01` AuthMoreData),
-/// raises [`@moon_mysql.MysqlError::UnsupportedError`]: client_ed25519 and
-/// caching_sha2_password are on the README roadmap, not stubbed.
+/// mysql_native_password and caching_sha2_password (MySQL 8's default, including
+/// the RSA full-auth path on a cache miss) are handled directly, whether the
+/// server drives them from its default or via an AuthSwitchRequest. A switch to any
+/// other plugin (e.g. client_ed25519, on the README roadmap) raises
+/// [`@moon_mysql.MysqlError::UnsupportedError`].
 pub async fn MysqlConn::connect(
   host : String,
   port : Int,
@@ -102,13 +100,16 @@ pub async fn MysqlConn::connect(
   if @moon_mysql.is_ok_packet(auth) {
     return conn
   }
-  // AuthSwitchRequest (0xFE + body): honour it only for mysql_native_password —
-  // the plugin MariaDB offers when its default differs but the account is native.
+  // AuthSwitchRequest (0xFE + body): the server offers a different plugin — answer
+  // mysql_native_password directly, or caching_sha2_password via its scramble +
+  // AuthMoreData exchange.
   if @moon_mysql.is_auth_switch_request(auth) {
     let (plugin, new_salt) = @moon_mysql.parse_auth_switch_request(auth)
     if plugin == "mysql_native_password" || plugin == "" {
-      let reply = @moon_mysql.native_password_scramble(pw, new_salt)
-      conn.write_packet(conn.seq + 1, reply)
+      conn.write_packet(
+        conn.seq + 1,
+        @moon_mysql.native_password_scramble(pw, new_salt),
+      )
       let final_pkt = conn.read_packet()
       if @moon_mysql.is_err_packet(final_pkt) {
         raise @moon_mysql.parse_err(final_pkt)
@@ -118,21 +119,96 @@ pub async fn MysqlConn::connect(
       }
       conn.tcp.close()
       raise @moon_mysql.UnsupportedError(
-        "unexpected packet after mysql_native_password auth-switch (caching_sha2 full-auth is on the README roadmap)",
+        "unexpected packet after mysql_native_password auth-switch",
       )
+    }
+    if plugin == "caching_sha2_password" {
+      conn.write_packet(
+        conn.seq + 1,
+        @moon_mysql.caching_sha2_scramble(pw, new_salt),
+      )
+      conn.finish_caching_sha2(pw, new_salt, conn.read_packet())
+      return conn
     }
     conn.tcp.close()
     raise @moon_mysql.UnsupportedError(
       "server requested auth-switch to '" +
       plugin +
-      "'; only mysql_native_password is implemented (client_ed25519 / caching_sha2_password are on the README roadmap)",
+      "'; only mysql_native_password and caching_sha2_password are implemented (client_ed25519 is on the README roadmap)",
     )
   }
-  // 0x01 = AuthMoreData (caching_sha2_password full auth) or anything unexpected.
+  // AuthMoreData (lead byte 0x01): the caching_sha2 reply to the fast scramble we
+  // already sent in the handshake response.
+  if auth.length() >= 1 && auth[0].to_int() == 0x01 {
+    conn.finish_caching_sha2(pw, handshake.salt, auth)
+    return conn
+  }
   conn.tcp.close()
-  raise @moon_mysql.UnsupportedError(
-    "server drove a caching_sha2_password full-auth exchange; only mysql_native_password is implemented this round — see README roadmap",
-  )
+  raise @moon_mysql.UnsupportedError("unexpected packet during authentication")
+}
+
+///|
+/// Drive the caching_sha2_password exchange to completion given the server's
+/// AuthMoreData reply to the fast scramble. `0x03` is fast-auth success (a cached
+/// digest); `0x04` needs full auth — without TLS the client fetches the server's
+/// RSA public key and returns the nonce-obfuscated password RSA-OAEP encrypted
+/// under it. `nonce` is the same salt the fast scramble used.
+async fn MysqlConn::finish_caching_sha2(
+  self : MysqlConn,
+  pw : Bytes,
+  nonce : Bytes,
+  more_data : Bytes,
+) -> Unit {
+  guard more_data.length() >= 2 && more_data[0].to_int() == 0x01 else {
+    self.tcp.close()
+    raise @moon_mysql.ProtocolError("caching_sha2: expected AuthMoreData")
+  }
+  match more_data[1].to_int() {
+    0x03 => self.expect_ok_or_err(self.read_packet()) // fast auth success
+    0x04 => {
+      // Request the server's RSA public key (no TLS ⇒ full auth over RSA).
+      self.write_packet(self.seq + 1, b"\x02")
+      let key_pkt = self.read_packet()
+      guard key_pkt.length() >= 1 && key_pkt[0].to_int() == 0x01 else {
+        self.tcp.close()
+        raise @moon_mysql.ProtocolError("caching_sha2: expected public key")
+      }
+      let pem = @moon_mysql.bytes_to_string(key_pkt[1:].to_owned())
+      let seed = match @env.rand(20) {
+        Some(b) => b
+        None => {
+          self.tcp.close()
+          raise @moon_mysql.ProtocolError("no CSPRNG for the OAEP seed")
+        }
+      }
+      let token = @moon_mysql.caching_sha2_full_auth_token(pw, nonce, pem, seed)
+      self.write_packet(self.seq + 1, token)
+      self.expect_ok_or_err(self.read_packet())
+    }
+    other => {
+      self.tcp.close()
+      raise @moon_mysql.ProtocolError(
+        "caching_sha2: unexpected status " + other.to_string(),
+      )
+    }
+  }
+}
+
+///|
+/// A terminal auth packet must be OK (success) or ERR (raise); anything else is a
+/// protocol violation.
+fn MysqlConn::expect_ok_or_err(
+  self : MysqlConn,
+  pkt : Bytes,
+) -> Unit raise @moon_mysql.MysqlError {
+  if @moon_mysql.is_err_packet(pkt) {
+    raise @moon_mysql.parse_err(pkt)
+  }
+  if @moon_mysql.is_ok_packet(pkt) {
+    return
+  }
+  self.tcp.close()
+  raise @moon_mysql.ProtocolError("unexpected packet after caching_sha2 auth")
 }
 
 ///|

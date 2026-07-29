@@ -268,6 +268,70 @@ jobs:
         run: |
           moon fmt && git diff --exit-code
 
+  # MySQL 8's own default plugin is caching_sha2_password. A fresh container has an
+  # empty auth cache, so the very first connection always performs full auth — the
+  # RSA public-key exchange + OAEP path — which this job exercises end to end.
+  mysql-caching-sha2:
+    name: moon-mysql (caching_sha2 full auth, live MySQL 8)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: drivers/mysql
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: start mysql 8 (default caching_sha2_password)
+        run: |
+          docker run -d --name mysql8cs \
+            -e MYSQL_ROOT_PASSWORD=root \
+            -e MYSQL_ROOT_HOST=% \
+            -e MYSQL_DATABASE=test \
+            -p 3306:3306 \
+            mysql:8.0 --default-authentication-plugin=caching_sha2_password
+
+      - name: install moon
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> $GITHUB_PATH
+
+      - name: post install
+        run: |
+          moon version --all
+          moon update
+
+      - name: wait for mysql
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec mysql8cs mysqladmin ping -uroot -proot --silent 2>/dev/null; then
+              echo "mysql is up"; break
+            fi
+            echo "waiting for mysql... ($i)"; sleep 2
+          done
+          sleep 3
+          docker exec mysql8cs mysql -uroot -proot -e "SELECT VERSION(); SELECT plugin FROM mysql.user WHERE user='root' LIMIT 1;"
+
+      - name: moon check
+        run: moon check --target all --deny-warn
+
+      - name: moon build
+        run: moon build --target all
+
+      - name: moon test (native round trip authenticating via caching_sha2 full auth)
+        env:
+          MYSQL_TEST: "1"
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: "root"
+          MYSQL_PASSWORD: "root"
+          MYSQL_DB: "test"
+        run: moon test --target all
+
+      - name: lint (fmt is clean)
+        run: |
+          moon fmt && git diff --exit-code
+
   # MariaDB speaks the MySQL wire protocol, so the SAME integration suite must be
   # green against it. We start MariaDB the same container way (no
   # --default-authentication-plugin: MariaDB has no such flag and already defaults

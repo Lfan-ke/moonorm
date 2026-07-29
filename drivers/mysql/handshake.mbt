@@ -196,35 +196,42 @@ pub fn parse_handshake(payload : Bytes) -> Handshake raise MysqlError {
 ///|
 /// Build the client's HandshakeResponse41 payload for `user`/`password`/`database`.
 ///
-/// mysql_native_password is the tested path on both MySQL and MariaDB. When the
-/// server advertises a different default (e.g. a MariaDB configured for
-/// client_ed25519, or MySQL 8's caching_sha2_password) but still speaks pluggable
-/// auth, the client advertises mysql_native_password and sends a native token: a
-/// native-capable account then authenticates directly, and otherwise the server
-/// drives an AuthSwitchRequest that [`MysqlConn::connect`] answers (to
-/// mysql_native_password) or rejects with a roadmap error. Only a server that
-/// requires a non-native plugin *and* does not offer pluggable auth is rejected
-/// here. client_ed25519 and caching_sha2_password full-auth remain on the README
-/// roadmap and are not stubbed.
+/// mysql_native_password and caching_sha2_password (MySQL 8's default, fast-path
+/// scramble here and full auth driven in [`MysqlConn::connect`]) are both handled
+/// directly. For any other plugin the client advertises mysql_native_password and
+/// sends a native token, so a native-capable account authenticates and otherwise
+/// the server drives an AuthSwitchRequest the connection layer answers (native or
+/// caching_sha2) or rejects. Only a server that requires a non-native plugin *and*
+/// does not offer pluggable auth is rejected here. client_ed25519 remains on the
+/// README roadmap.
 pub fn build_handshake_response(
   handshake : Handshake,
   user : String,
   password : Bytes,
   database : String,
 ) -> Bytes raise MysqlError {
-  let auth_response = if handshake.auth_plugin == "mysql_native_password" ||
+  let (auth_response, advertised_plugin) = if handshake.auth_plugin ==
+    "caching_sha2_password" {
+    (caching_sha2_scramble(password, handshake.salt), "caching_sha2_password")
+  } else if handshake.auth_plugin == "mysql_native_password" ||
     handshake.auth_plugin == "" {
-    native_password_scramble(password, handshake.salt)
+    (
+      native_password_scramble(password, handshake.salt),
+      "mysql_native_password",
+    )
   } else if (handshake.capability & client_plugin_auth) != 0 {
-    // Negotiate down: advertise mysql_native_password and let the server offer it
-    // via an auth-method switch (handled in the connection layer).
-    native_password_scramble(password, handshake.salt)
+    // Negotiate down: advertise mysql_native_password and let the server offer its
+    // plugin via an auth-method switch (handled in the connection layer).
+    (
+      native_password_scramble(password, handshake.salt),
+      "mysql_native_password",
+    )
   } else {
     raise UnsupportedError(
       "server requires auth plugin '" +
       handshake.auth_plugin +
-      "' and does not offer pluggable auth; only mysql_native_password is implemented " +
-      "(client_ed25519 / caching_sha2_password are on the README roadmap)",
+      "' and does not offer pluggable auth; only mysql_native_password and " +
+      "caching_sha2_password are implemented (client_ed25519 is on the README roadmap)",
     )
   }
   let mut caps = client_protocol_41 |
@@ -249,7 +256,7 @@ pub fn build_handshake_response(
   if database.length() > 0 {
     put_string_nul(buf, string_to_bytes(database))
   }
-  put_string_nul(buf, string_to_bytes("mysql_native_password"))
+  put_string_nul(buf, string_to_bytes(advertised_plugin))
   buf.to_bytes()
 }
 
