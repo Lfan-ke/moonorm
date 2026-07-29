@@ -140,8 +140,10 @@ async fn PgConn::run_startup(
 /// an AuthenticationSASL message whose offered-mechanism list is read from `mechs`.
 /// Sends the client-first message with a CSPRNG nonce, derives the client-final
 /// proof from the server's challenge, and verifies the server signature before
-/// returning; the caller's loop then consumes AuthenticationOk. The password is
-/// used as-is (SASLprep is a no-op for the ASCII passwords in practice).
+/// returning; the caller's loop then consumes AuthenticationOk. The password is used
+/// verbatim: SASLprep (RFC 4013) is not applied, so it must already be normalised —
+/// an ASCII password needs nothing, but a non-ASCII one must be pre-normalised or
+/// the derived key will not match the server's stored verifier.
 async fn PgConn::run_sasl(
   self : PgConn,
   password : String,

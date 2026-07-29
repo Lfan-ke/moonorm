@@ -243,6 +243,13 @@ pub fn reflect_table(
   driver : &@moondb.Driver,
   table : String,
 ) -> Array[Column] raise @moondb.DbError {
+  // PRAGMA takes an identifier, not a bindable parameter, so the name is validated
+  // rather than concatenated blind — the same is_ident discipline the rest uses.
+  guard is_ident(table) else {
+    raise @moondb.QueryError(
+      "reflect_table: invalid table identifier '\{table}'",
+    )
+  }
   reflect_columns(driver.query("PRAGMA table_info(" + table + ")", []))
 }
 
@@ -269,6 +276,11 @@ fn find_col(cols : Array[Column], name : String) -> Column? {
 /// both with a different `col_type` is `TypeChanged`. An empty result means the table
 /// matches the model. This is the write half of autogenerate — feed the diff to DDL
 /// to synthesise the migration.
+///
+/// Scope: reflection recovers only a column's storage type, so declare a model at the
+/// same granularity to avoid spurious diffs — a `Bool` stored as `INTEGER` reflects as
+/// `Int`, `Uuid`/`Json` stored as `TEXT` reflect as `Text`. And the diff reports
+/// add/remove/type only, not nullable / default / unique / PK / FK changes.
 pub fn diff_schema(
   declared : Array[Column],
   reflected : Array[Column],
@@ -414,7 +426,12 @@ pub fn reflect_table_for(
           [Text(table)],
         ),
       )
-    Mysql =>
+    Mysql => {
+      // SHOW COLUMNS names an identifier, not a bindable parameter — validate it.
+      guard is_ident(table) else {
+        raise @moondb.QueryError("reflect: invalid table identifier '\{table}'")
+      }
       reflect_columns_mysql(driver.query("SHOW COLUMNS FROM " + table, []))
+    }
   }
 }

@@ -356,3 +356,32 @@ test "parameters thread through both set-operation operands in order" {
   assert_eq(params[0] == Int(1), true)
   assert_eq(params[1] == Int(9), true)
 }
+
+///|
+test "review fixes: offset-only limit, IS NULL fold, bulk insert, EXISTS" {
+  // B2: a bare OFFSET synthesises an effectively-unbounded LIMIT (SQLite/MySQL
+  // reject `OFFSET` without `LIMIT`).
+  let (o, _) = select("t").offset(10).build()
+  assert_eq(o, "SELECT * FROM t LIMIT 9223372036854775807 OFFSET 10")
+  // B6: `= NULL` / `!= NULL` fold to IS NULL / IS NOT NULL and bind nothing.
+  let (n1, p1) = select("t").eq("a", Null).build()
+  assert_eq(n1, "SELECT * FROM t WHERE a IS NULL")
+  assert_eq(p1.length(), 0)
+  let (n2, _) = select("t").where_("a", "!=", Null).build()
+  assert_eq(n2, "SELECT * FROM t WHERE a IS NOT NULL")
+  // Bulk insert: one VALUES tuple per row, every value bound in order.
+  let (bi, bp) = insert("t")
+    .set("a", Int(1))
+    .set("b", Int(2))
+    .values([Int(3), Int(4)])
+    .values([Int(5), Int(6)])
+    .build()
+  assert_eq(bi, "INSERT INTO t (a, b) VALUES (?, ?), (?, ?), (?, ?)")
+  assert_eq(bp.length(), 6)
+  assert_eq(bp[4] == Int(5), true)
+  // EXISTS subquery, its bound value spliced in at position.
+  let sub = select("o").column("1").where_("o.uid", "=", Int(7))
+  let (e, ep) = select("u").where_exists(sub).build()
+  assert_eq(e, "SELECT * FROM u WHERE EXISTS (SELECT 1 FROM o WHERE o.uid = ?)")
+  assert_eq(ep[0] == Int(7), true)
+}

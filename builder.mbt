@@ -72,6 +72,7 @@ fn join(parts : Array[String], sep : String) -> String {
 pub(all) enum Predicate {
   Cmp(col~ : String, op~ : String, val~ : Value)
   InList(col~ : String, vals~ : Array[Value], negated~ : Bool)
+  Exists(sub~ : Select, negated~ : Bool)
   And(Array[Predicate])
   Or(Array[Predicate])
   Not(Predicate)
@@ -83,20 +84,36 @@ pub(all) enum Predicate {
 pub fn Predicate::build(self : Predicate) -> (String, Array[Value]) {
   match self {
     Cmp(col~, op~, val~) => (col + " " + op + " ?", [val])
-    InList(col~, vals~, negated~) => {
-      let kw = if negated { " NOT IN (" } else { " IN (" }
+    InList(col~, vals~, negated~) =>
+      // Empty `IN` matches nothing, empty `NOT IN` matches everything (SQLAlchemy's
+      // constant fold). `IN/NOT IN (NULL)` would get both wrong via three-valued
+      // NULL logic (`NOT IN (NULL)` is never true).
       if vals.length() == 0 {
-        (col + kw + "NULL)", [])
+        (if negated { "1 = 1" } else { "1 = 0" }, [])
       } else {
         let ph : Array[String] = []
         for _v in vals {
           ph.push("?")
         }
+        let kw = if negated { " NOT IN (" } else { " IN (" }
         (col + kw + join(ph, ", ") + ")", vals)
       }
+    Exists(sub~, negated~) => {
+      let (s, p) = sub.build()
+      ((if negated { "NOT EXISTS (" } else { "EXISTS (" }) + s + ")", p)
     }
-    And(ps) => predicate_combine(ps, " AND ")
-    Or(ps) => predicate_combine(ps, " OR ")
+    And(ps) =>
+      if ps.length() == 0 {
+        ("1 = 1", [])
+      } else {
+        predicate_combine(ps, " AND ")
+      }
+    Or(ps) =>
+      if ps.length() == 0 {
+        ("1 = 0", [])
+      } else {
+        predicate_combine(ps, " OR ")
+      }
     Not(p) => {
       let (s, pa) = p.build()
       ("NOT (" + s + ")", pa)
@@ -212,7 +229,9 @@ pub fn Select::distinct(self : Select) -> Select {
 }
 
 ///|
-/// `UNION` this query with `other` — the combined rows with duplicates removed.
+/// `UNION` this query with `other` — the combined rows with duplicates removed. A
+/// trailing ORDER BY / LIMIT on either query binds to the whole compound (standard
+/// SQL); to order or limit a single operand, wrap it as a subquery in its FROM.
 pub fn Select::union(self : Select, other : Select) -> Select {
   self.set_ops.push(("UNION", other))
   self
@@ -392,13 +411,26 @@ pub fn Select::where_not_in(
 }
 
 ///|
+/// Add an `EXISTS (subquery)` predicate (ANDed with the rest) — true when the
+/// subquery returns any row (SQLAlchemy's `exists()`). The subquery's bound values
+/// splice in at its position, so it stays injection-safe.
+pub fn Select::where_exists(self : Select, sub : Select) -> Select {
+  self.where_pred(Exists(sub~, negated=false))
+}
+
+///|
+/// Add a `NOT EXISTS (subquery)` predicate (ANDed with the rest). See `where_exists`.
+pub fn Select::where_not_exists(self : Select, sub : Select) -> Select {
+  self.where_pred(Exists(sub~, negated=true))
+}
+
+///|
 /// Add a `col IN (?, ?, …)` predicate over an explicit list of values (ANDed with
 /// the rest). Every value binds as its own placeholder, never spliced — this is the
 /// set-membership filter a batch load issues to fetch the related rows of many
 /// parents in one round trip (`WHERE fk IN (key1, key2, …)`) instead of one query
-/// per parent. An empty `vals` renders `col IN (NULL)`, which matches nothing (the
-/// SQL-correct reading of "in the empty set"); callers with no keys should skip the
-/// query outright.
+/// per parent. An empty `vals` renders the always-false `1 = 0` — "in the empty set"
+/// matches nothing — so a batch load with no keys returns no rows rather than erroring.
 pub fn Select::where_in_values(
   self : Select,
   col : String,
@@ -410,8 +442,8 @@ pub fn Select::where_in_values(
 
 ///|
 /// Add a `col NOT IN (?, ?, …)` predicate over an explicit list of values (ANDed
-/// with the rest). See `where_in_values`; an empty `vals` renders `col NOT IN
-/// (NULL)`.
+/// with the rest). See `where_in_values`; an empty `vals` renders the always-true
+/// `1 = 1` — "not in the empty set" matches every row.
 pub fn Select::where_not_in_values(
   self : Select,
   col : String,
@@ -474,21 +506,31 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
     self.preds.length() > 0 {
     let cparts : Array[String] = []
     for c in self.conds {
+      // `= NULL` / `!= NULL` never match under three-valued logic; rewrite a NULL
+      // equality to `IS NULL` / `IS NOT NULL` the way SQLAlchemy folds `== None`.
+      if c.val is Null && (c.op == "=" || c.op == "!=" || c.op == "<>") {
+        cparts.push(
+          c.col + (if c.op == "=" { " IS NULL" } else { " IS NOT NULL" }),
+        )
+        continue
+      }
       cparts.push(c.col + " " + c.op + " ?")
       params.push(c.val)
     }
     for ic in self.in_conds {
-      let placeholders : Array[String] = []
+      // Empty `IN` matches nothing, empty `NOT IN` matches everything — a constant
+      // predicate, not `IN (NULL)` (which is never true under NULL logic).
       if ic.vals.length() == 0 {
-        placeholders.push("NULL")
+        cparts.push(if ic.negated { "1 = 1" } else { "1 = 0" })
       } else {
+        let placeholders : Array[String] = []
         for v in ic.vals {
           placeholders.push("?")
           params.push(v)
         }
+        let op = if ic.negated { "NOT IN" } else { "IN" }
+        cparts.push(ic.col + " " + op + " (" + join(placeholders, ", ") + ")")
       }
-      let op = if ic.negated { "NOT IN" } else { "IN" }
-      cparts.push(ic.col + " " + op + " (" + join(placeholders, ", ") + ")")
     }
     for sc in self.sub_conds {
       let (sub_sql, sub_params) = sc.sub.build()
@@ -536,7 +578,13 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
   }
   match self.limit_ {
     Some(n) => sql = sql + " LIMIT " + n.to_string()
-    None => ()
+    None =>
+      // SQLite and MySQL reject a bare OFFSET (the grammar is `LIMIT n [OFFSET m]`),
+      // so synthesise an effectively-unbounded LIMIT when only OFFSET is set. i64-max
+      // is accepted by SQLite, MySQL, and Postgres alike.
+      if self.offset_ is Some(_) {
+        sql = sql + " LIMIT 9223372036854775807"
+      }
   }
   match self.offset_ {
     Some(n) => sql = sql + " OFFSET " + n.to_string()
@@ -602,13 +650,15 @@ pub struct Insert {
   table : String
   cols : Array[String]
   vals : Array[Value]
+  // Additional value tuples for a multi-row INSERT, each in `cols` order.
+  extra_rows : Array[Array[Value]]
   mut conflict : Conflict?
   returning : Array[String]
 }
 
 ///|
 pub fn insert(table : String) -> Insert {
-  { table, cols: [], vals: [], conflict: None, returning: [] }
+  { table, cols: [], vals: [], extra_rows: [], conflict: None, returning: [] }
 }
 
 ///|
@@ -616,6 +666,16 @@ pub fn insert(table : String) -> Insert {
 pub fn Insert::set(self : Insert, col : String, val : Value) -> Insert {
   self.cols.push(col)
   self.vals.push(val)
+  self
+}
+
+///|
+/// Append another row to a multi-row INSERT, in the same column order the first row
+/// established via `set` (SQLAlchemy's multi-values / `executemany`). Every value
+/// binds as its own placeholder, so a bulk insert stays injection-safe; each `row`
+/// must supply one value per column.
+pub fn Insert::values(self : Insert, row : Array[Value]) -> Insert {
+  self.extra_rows.push(row)
   self
 }
 
@@ -712,18 +772,26 @@ pub fn Insert::build_for(
   dialect : Dialect,
 ) -> (String, Array[Value]) {
   let params : Array[Value] = []
-  let placeholders : Array[String] = []
-  for v in self.vals {
-    placeholders.push("?")
-    params.push(v)
+  // One `(?, ?, …)` tuple per row — the first from `set`, then any bulk `values`.
+  let tuples : Array[String] = []
+  let emit_tuple = fn(row : Array[Value]) {
+    let ph : Array[String] = []
+    for v in row {
+      ph.push("?")
+      params.push(v)
+    }
+    tuples.push("(" + join(ph, ", ") + ")")
+  }
+  emit_tuple(self.vals)
+  for row in self.extra_rows {
+    emit_tuple(row)
   }
   let mut sql = "INSERT INTO " +
     self.table +
     " (" +
     join(self.cols, ", ") +
-    ") VALUES (" +
-    join(placeholders, ", ") +
-    ")"
+    ") VALUES " +
+    join(tuples, ", ")
   match self.conflict {
     Some(c) => sql = sql + render_conflict(c, dialect, self.cols, params)
     None => ()
@@ -842,6 +910,14 @@ pub fn Update::build(self : Update) -> (String, Array[Value]) {
   if self.conds.length() > 0 {
     let cparts : Array[String] = []
     for c in self.conds {
+      // `= NULL` / `!= NULL` never match under three-valued logic; rewrite a NULL
+      // equality to `IS NULL` / `IS NOT NULL` the way SQLAlchemy folds `== None`.
+      if c.val is Null && (c.op == "=" || c.op == "!=" || c.op == "<>") {
+        cparts.push(
+          c.col + (if c.op == "=" { " IS NULL" } else { " IS NOT NULL" }),
+        )
+        continue
+      }
       cparts.push(c.col + " " + c.op + " ?")
       params.push(c.val)
     }
@@ -882,6 +958,14 @@ pub fn Delete::build(self : Delete) -> (String, Array[Value]) {
   if self.conds.length() > 0 {
     let cparts : Array[String] = []
     for c in self.conds {
+      // `= NULL` / `!= NULL` never match under three-valued logic; rewrite a NULL
+      // equality to `IS NULL` / `IS NOT NULL` the way SQLAlchemy folds `== None`.
+      if c.val is Null && (c.op == "=" || c.op == "!=" || c.op == "<>") {
+        cparts.push(
+          c.col + (if c.op == "=" { " IS NULL" } else { " IS NOT NULL" }),
+        )
+        continue
+      }
       cparts.push(c.col + " " + c.op + " ?")
       params.push(c.val)
     }

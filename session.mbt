@@ -54,7 +54,9 @@ pub fn Session::query(
 }
 
 ///|
-/// Build and run an `Insert`, returning the affected-row count and new rowid.
+/// Build and run an `Insert`, returning the affected-row count and new rowid. This
+/// renders the SQLite/PostgreSQL form (`ON CONFLICT` upserts, `RETURNING`); for a
+/// MySQL upsert build the dialect form explicitly — `session.execute(stmt.build_for(Mysql))`.
 pub fn Session::add(
   self : Session,
   stmt : Insert,

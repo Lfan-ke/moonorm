@@ -269,7 +269,7 @@ pub fn scram_client_final(
   password : Bytes,
   client_first_bare : String,
   server_first : String,
-) -> (String, Bytes) {
+) -> (String, Bytes) raise DbError {
   let mut nonce = ""
   let mut salt_b64 = ""
   let mut iters = 0
@@ -281,6 +281,18 @@ pub fn scram_client_final(
     } else if part.has_prefix("i=") {
       iters = atoi(part[2:].to_owned())
     }
+  }
+  // RFC 5802 §5.1: the server nonce MUST begin with the client nonce we sent.
+  let mut client_nonce = ""
+  for part in client_first_bare.split(",") {
+    if part.has_prefix("r=") {
+      client_nonce = part[2:].to_owned()
+    }
+  }
+  guard client_nonce != "" && nonce.has_prefix(client_nonce) else {
+    raise @moondb.QueryError(
+      "SCRAM: server nonce does not extend the client nonce",
+    )
   }
   let salted = pbkdf2_sha256(password, base64_decode(salt_b64), iters)
   let client_final_wo = "c=biws,r=" + nonce

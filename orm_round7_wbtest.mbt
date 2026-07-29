@@ -177,10 +177,14 @@ test "where_not_in_values and the empty set" {
   let (sql1, p1) = select("t").where_not_in_values("k", [Int(9)]).build()
   assert_eq(sql1, "SELECT * FROM t WHERE k NOT IN (?)")
   assert_eq(p1[0] == Int(9), true)
-  // An empty value list is the empty set: IN (NULL) matches nothing, no params.
+  // The empty set constant-folds: empty IN matches nothing (1 = 0), empty NOT IN
+  // matches everything (1 = 1) — never `IN (NULL)`, which is wrong under NULL logic.
   let (sql2, p2) = select("t").where_in_values("k", []).build()
-  assert_eq(sql2, "SELECT * FROM t WHERE k IN (NULL)")
+  assert_eq(sql2, "SELECT * FROM t WHERE 1 = 0")
   assert_eq(p2.length(), 0)
+  let (sql3, p3) = select("t").where_not_in_values("k", []).build()
+  assert_eq(sql3, "SELECT * FROM t WHERE 1 = 1")
+  assert_eq(p3.length(), 0)
 }
 
 ///|
