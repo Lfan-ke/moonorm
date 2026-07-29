@@ -48,7 +48,15 @@ pub(all) struct Column {
   // A DDL `DEFAULT` expression (SQLAlchemy `server_default`), e.g. `"0"` or
   // `"CURRENT_TIMESTAMP"`. A trusted SQL literal, emitted verbatim, never bound.
   default : String?
+  // Column-level `CHECK (expr)` constraints (SQLAlchemy CheckConstraint / column
+  // `CHECK`), each a trusted SQL expression.
+  checks : Array[String]
   references : (String, String)?
+  // Referential actions on the foreign key (SQLAlchemy ForeignKey ondelete/onupdate),
+  // e.g. `"CASCADE"` / `"SET NULL"` / `"RESTRICT"`. Emitted only when `references` is
+  // set.
+  on_delete : String?
+  on_update : String?
 }
 
 ///|
@@ -63,9 +71,23 @@ pub fn column(
   nullable? : Bool = true,
   unique? : Bool = false,
   default? : String? = None,
+  checks? : Array[String] = [],
   references? : (String, String)? = None,
+  on_delete? : String? = None,
+  on_update? : String? = None,
 ) -> Column {
-  { name, col_type, primary_key, nullable, unique, default, references }
+  {
+    name,
+    col_type,
+    primary_key,
+    nullable,
+    unique,
+    default,
+    checks,
+    references,
+    on_delete,
+    on_update,
+  }
 }
 
 ///|
@@ -89,8 +111,19 @@ pub fn Column::ddl(self : Column, inline_pk? : Bool = true) -> String {
   if self.default is Some(expr) {
     s = s + " DEFAULT " + expr
   }
+  for chk in self.checks {
+    s = s + " CHECK (" + chk + ")"
+  }
   match self.references {
-    Some((t, c)) => s = s + " REFERENCES " + t + "(" + c + ")"
+    Some((t, c)) => {
+      s = s + " REFERENCES " + t + "(" + c + ")"
+      if self.on_delete is Some(act) {
+        s = s + " ON DELETE " + act
+      }
+      if self.on_update is Some(act) {
+        s = s + " ON UPDATE " + act
+      }
+    }
     None => ()
   }
   s
@@ -129,7 +162,10 @@ pub fn[T] field(
   nullable? : Bool = true,
   unique? : Bool = false,
   default? : String? = None,
+  checks? : Array[String] = [],
   references? : (String, String)? = None,
+  on_delete? : String? = None,
+  on_update? : String? = None,
 ) -> Field[T] {
   {
     column: {
@@ -139,7 +175,10 @@ pub fn[T] field(
       nullable,
       unique,
       default,
+      checks,
       references,
+      on_delete,
+      on_update,
     },
     encode,
   }
