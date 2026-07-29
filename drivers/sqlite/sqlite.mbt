@@ -122,9 +122,11 @@ pub impl @moondb.Driver for SqliteDriver with fn query(self, sql, params) {
     cols.push(bytes_to_str(ffi_col_name(st, i)))
   }
   let rows : Array[@moondb.Row] = []
+  let mut term = sqlite_done
   for ;; {
     let rc = ffi_step(st)
     if rc != sqlite_row {
+      term = rc
       break
     }
     let vals : Array[@moondb.Value] = []
@@ -142,6 +144,11 @@ pub impl @moondb.Driver for SqliteDriver with fn query(self, sql, params) {
     rows.push({ columns: cols, values: vals })
   }
   ffi_finalize(st) |> ignore
+  // A mid-scan error (SQLITE_ERROR/BUSY/…) must surface, not silently truncate the
+  // result the way a bare `break` on any non-row code would.
+  if term != sqlite_done {
+    raise @moondb.QueryError(bytes_to_str(ffi_errmsg(self.handle)))
+  }
   rows
 }
 

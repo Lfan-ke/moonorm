@@ -65,4 +65,6 @@ moonbit_bytes_t orm_col_name(int64_t st, int32_t i) {
 int32_t orm_finalize(int64_t st) { return sqlite3_finalize((sqlite3_stmt*)(intptr_t)st); }
 int32_t orm_changes(int64_t db) { return sqlite3_changes((sqlite3*)(intptr_t)db); }
 int64_t orm_last_id(int64_t db) { return sqlite3_last_insert_rowid((sqlite3*)(intptr_t)db); }
-int32_t orm_close(int64_t db) { return sqlite3_close((sqlite3*)(intptr_t)db); }
+/* close_v2 defers the free until any still-live prepared statement (e.g. an
+   abandoned streaming cursor) is finalized, so the handle is never leaked. */
+int32_t orm_close(int64_t db) { return sqlite3_close_v2((sqlite3*)(intptr_t)db); }

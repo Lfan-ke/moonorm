@@ -96,6 +96,19 @@ async test "integration: query_stream yields rows incrementally and matches quer
   partial.close()
   let reused = conn.query("SELECT count(*) FROM moon_pg_stream", [])
   assert_eq(reused[0].int64(0), 5L)
+  // The pipeline guard: leaving a stream open (no drain, no close) must raise on
+  // the next statement rather than silently desync the connection.
+  let leaked = conn.query_stream("SELECT id FROM moon_pg_stream", [])
+  assert_eq(leaked.next() is Some(_), true)
+  let guarded = try {
+    conn.query("SELECT 1", []) |> ignore
+    false
+  } catch {
+    _ => true
+  }
+  assert_eq(guarded, true)
+  leaked.close() // draining restores the connection for reuse
+  assert_eq(conn.query("SELECT 1", [])[0].int(0), 1)
   conn.close()
 }
 

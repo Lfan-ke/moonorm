@@ -185,11 +185,9 @@ pub fn ed25519_sign(secret : Bytes, msg : Bytes) -> Bytes {
 
 ///|
 /// The MariaDB client_ed25519 response: the 64-byte Ed25519 signature of the
-/// server's 32-byte challenge, keyed by the password. An empty password yields an
-/// empty response (matching the native-plugin convention).
+/// server's 32-byte challenge, keyed by the password. Unlike mysql_native_password,
+/// the ed25519 plugin signs unconditionally — an empty password expands to
+/// `SHA-512("")` and still yields a valid signature.
 pub fn mariadb_ed25519_response(password : Bytes, scramble : Bytes) -> Bytes {
-  if password.length() == 0 {
-    return b""
-  }
   ed25519_sign(password, scramble)
 }

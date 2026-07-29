@@ -193,9 +193,16 @@ pub fn rsa_oaep_sha1_encrypt(
   n : BigInt,
   e : BigInt,
   seed : Bytes,
-) -> Bytes {
+) -> Bytes raise MysqlError {
   let k = n.to_octets().length()
   let hlen = 20
+  // RFC 8017 §7.1.1 step 1b: a message longer than k − 2·hLen − 2 does not fit;
+  // reject it rather than build a malformed (out-of-range) padded block.
+  if msg.length() > k - 2 * hlen - 2 {
+    raise ProtocolError(
+      "caching_sha2: password too long for RSA-OAEP under this key",
+    )
+  }
   let lhash = sha1(b"")
   let db = Buffer()
   db.write_bytes(lhash[:])
@@ -231,6 +238,9 @@ pub fn caching_sha2_full_auth_token(
   pem : String,
   seed : Bytes,
 ) -> Bytes raise MysqlError {
+  guard nonce.length() > 0 else {
+    raise ProtocolError("caching_sha2: empty server nonce")
+  }
   let obf = Buffer()
   for i in 0..<(password.length() + 1) {
     let p = if i < password.length() { password[i].to_int() } else { 0 }

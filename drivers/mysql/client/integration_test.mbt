@@ -229,5 +229,18 @@ async test "integration: MySQL query_stream yields rows incrementally and matche
   partial.close()
   let reused = conn.query("SELECT COUNT(*) FROM t_moon_stream", [])
   assert_eq(reused[0].int64(0), 5L)
+  // The pipeline guard: an outstanding stream must raise on the next command
+  // rather than silently desync the connection.
+  let leaked = conn.query_stream("SELECT id FROM t_moon_stream ORDER BY id", [])
+  assert_eq(leaked.next() is Some(_), true)
+  let guarded = try {
+    conn.query("SELECT 1", []) |> ignore
+    false
+  } catch {
+    _ => true
+  }
+  assert_eq(guarded, true)
+  leaked.close()
+  assert_eq(conn.query("SELECT 1", [])[0].int(0), 1)
   conn.close()
 }

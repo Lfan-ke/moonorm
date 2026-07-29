@@ -16,6 +16,11 @@
 pub struct PgConn {
   tcp : @socket.Tcp
   mut closed : Bool
+  // Set while a `PgRowStream` is outstanding. The wire is a strict per-connection
+  // pipeline, so a new statement issued before the stream is drained/closed would
+  // read the old result's leftover packets and desync the connection; guarding on
+  // this turns that silent corruption into a clear error.
+  mut streaming : Bool
 }
 
 ///|
@@ -39,9 +44,18 @@ pub async fn PgConn::connect(
   let tcp = @socket.Tcp::connect(addr) catch {
     e => raise @moondb.ConnectError("connect \{host}:\{port}: \{e}")
   }
-  let conn = PgConn::{ tcp, closed: false }
-  conn.write_all(build_startup(user, database))
-  conn.run_startup(user, password)
+  let conn = PgConn::{ tcp, closed: false, streaming: false }
+  // Close the socket on any handshake failure (a bad-password ErrorResponse is the
+  // common case) — MoonBit has no fd finalizer, so a raise here would leak it.
+  try {
+    conn.write_all(build_startup(user, database))
+    conn.run_startup(user, password)
+  } catch {
+    e => {
+      conn.tcp.close()
+      raise e
+    }
+  }
   conn
 }
 
@@ -338,6 +352,11 @@ async fn PgConn::send_statement(
   if self.closed {
     raise @moondb.Closed
   }
+  if self.streaming {
+    raise @moondb.QueryError(
+      "a query stream is still open on this connection; drain it or call close() before the next statement",
+    )
+  }
   if params.length() == 0 {
     self.write_all(build_query(sql))
   } else {
@@ -385,6 +404,7 @@ pub async fn PgConn::query_stream(
   params : Array[Value],
 ) -> PgRowStream raise DbError {
   self.send_statement(sql, params)
+  self.streaming = true
   { conn: self, col_names: [], col_oids: [], done: false }
 }
 
@@ -412,12 +432,12 @@ pub async fn PgRowStream::next(self : PgRowStream) -> Row? raise DbError {
       69 => {
         let msg = parse_error_response(payload)
         self.conn.drain_until_ready()
-        self.done = true
+        self.finish()
         raise @moondb.QueryError(msg)
       }
       // 'Z' ReadyForQuery
       90 => {
-        self.done = true
+        self.finish()
         return None
       }
       // 'C' CommandComplete / 'S' ParameterStatus / others — keep reading
@@ -427,12 +447,20 @@ pub async fn PgRowStream::next(self : PgRowStream) -> Row? raise DbError {
 }
 
 ///|
+/// Mark the stream done and release the connection's streaming guard so the next
+/// statement can run.
+fn PgRowStream::finish(self : PgRowStream) -> Unit {
+  self.done = true
+  self.conn.streaming = false
+}
+
+///|
 /// Abandon the stream early, draining any unread response to ReadyForQuery so the
 /// connection can run the next statement. Idempotent once the stream is done.
 pub async fn PgRowStream::close(self : PgRowStream) -> Unit raise DbError {
   if !self.done {
     self.conn.drain_until_ready()
-    self.done = true
+    self.finish()
   }
 }
 

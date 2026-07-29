@@ -16,6 +16,10 @@ pub struct MysqlConn {
   mut seq : Int
   mut closed : Bool
   mut server_kind : @moon_mysql.ServerKind
+  // Set while a `MysqlRowStream` is outstanding — the wire is a per-connection
+  // pipeline, so issuing a command before the stream drains would read the old
+  // result's leftover packets and desync the connection.
+  mut streaming : Bool
 }
 
 ///|
@@ -84,64 +88,74 @@ pub async fn MysqlConn::connect(
     seq: 0,
     closed: false,
     server_kind: @moon_mysql.ServerKind::MySQL,
+    streaming: false,
   }
   let pw = @utf8.encode(password[:])
-  let handshake = @moon_mysql.parse_handshake(conn.read_packet())
-  conn.server_kind = handshake.server_kind
+  // Close the socket on any handshake failure — a bad-credentials ERR is the
+  // common case, and MoonBit has no fd finalizer to reclaim a leaked socket.
+  conn.do_handshake(user, pw, database) catch {
+    e => {
+      conn.tcp.close()
+      raise e
+    }
+  }
+  conn
+}
+
+///|
+/// The authentication exchange, run under [`connect`]'s close-on-error guard.
+async fn MysqlConn::do_handshake(
+  self : MysqlConn,
+  user : String,
+  pw : Bytes,
+  database : String,
+) -> Unit {
+  let handshake = @moon_mysql.parse_handshake(self.read_packet())
+  self.server_kind = handshake.server_kind
   let response = @moon_mysql.build_handshake_response(
     handshake, user, pw, database,
   )
   // The handshake response is sequence id 1 (the server's handshake was 0).
-  conn.write_packet(conn.seq + 1, response)
-  let auth = conn.read_packet()
+  self.write_packet(self.seq + 1, response)
+  let auth = self.read_packet()
   if @moon_mysql.is_err_packet(auth) {
     raise @moon_mysql.parse_err(auth)
   }
   if @moon_mysql.is_ok_packet(auth) {
-    return conn
+    return
   }
   // AuthSwitchRequest (0xFE + body): the server offers a different plugin — answer
-  // mysql_native_password directly, or caching_sha2_password via its scramble +
-  // AuthMoreData exchange.
+  // mysql_native_password directly, or caching_sha2_password / client_ed25519 via
+  // their scramble + AuthMoreData exchange.
   if @moon_mysql.is_auth_switch_request(auth) {
     let (plugin, new_salt) = @moon_mysql.parse_auth_switch_request(auth)
     if plugin == "mysql_native_password" || plugin == "" {
-      conn.write_packet(
-        conn.seq + 1,
+      self.write_packet(
+        self.seq + 1,
         @moon_mysql.native_password_scramble(pw, new_salt),
       )
-      let final_pkt = conn.read_packet()
-      if @moon_mysql.is_err_packet(final_pkt) {
-        raise @moon_mysql.parse_err(final_pkt)
-      }
-      if @moon_mysql.is_ok_packet(final_pkt) {
-        return conn
-      }
-      conn.tcp.close()
-      raise @moon_mysql.UnsupportedError(
-        "unexpected packet after mysql_native_password auth-switch",
-      )
+      expect_ok_or_err(self.read_packet())
+      return
     }
     if plugin == "caching_sha2_password" {
-      conn.write_packet(
-        conn.seq + 1,
+      self.write_packet(
+        self.seq + 1,
         @moon_mysql.caching_sha2_scramble(pw, new_salt),
       )
-      conn.finish_caching_sha2(pw, new_salt, conn.read_packet())
-      return conn
+      self.finish_caching_sha2(pw, new_salt, self.read_packet())
+      return
     }
     if plugin == "client_ed25519" {
       // MariaDB signs the raw 32-byte nonce (not the NUL-stripped salt) with the
       // password-keyed Ed25519 secret.
       let nonce = @moon_mysql.parse_ed25519_challenge(auth)
-      conn.write_packet(
-        conn.seq + 1,
+      self.write_packet(
+        self.seq + 1,
         @moon_mysql.mariadb_ed25519_response(pw, nonce),
       )
-      conn.expect_ok_or_err(conn.read_packet())
-      return conn
+      expect_ok_or_err(self.read_packet())
+      return
     }
-    conn.tcp.close()
     raise @moon_mysql.UnsupportedError(
       "server requested auth-switch to '" +
       plugin +
@@ -151,10 +165,9 @@ pub async fn MysqlConn::connect(
   // AuthMoreData (lead byte 0x01): the caching_sha2 reply to the fast scramble we
   // already sent in the handshake response.
   if auth.length() >= 1 && auth[0].to_int() == 0x01 {
-    conn.finish_caching_sha2(pw, handshake.salt, auth)
-    return conn
+    self.finish_caching_sha2(pw, handshake.salt, auth)
+    return
   }
-  conn.tcp.close()
   raise @moon_mysql.UnsupportedError("unexpected packet during authentication")
 }
 
@@ -171,55 +184,44 @@ async fn MysqlConn::finish_caching_sha2(
   more_data : Bytes,
 ) -> Unit {
   guard more_data.length() >= 2 && more_data[0].to_int() == 0x01 else {
-    self.tcp.close()
     raise @moon_mysql.ProtocolError("caching_sha2: expected AuthMoreData")
   }
   match more_data[1].to_int() {
-    0x03 => self.expect_ok_or_err(self.read_packet()) // fast auth success
+    0x03 => expect_ok_or_err(self.read_packet()) // fast auth success
     0x04 => {
       // Request the server's RSA public key (no TLS ⇒ full auth over RSA).
       self.write_packet(self.seq + 1, b"\x02")
       let key_pkt = self.read_packet()
       guard key_pkt.length() >= 1 && key_pkt[0].to_int() == 0x01 else {
-        self.tcp.close()
         raise @moon_mysql.ProtocolError("caching_sha2: expected public key")
       }
       let pem = @moon_mysql.bytes_to_string(key_pkt[1:].to_owned())
       let seed = match @env.rand(20) {
         Some(b) => b
-        None => {
-          self.tcp.close()
-          raise @moon_mysql.ProtocolError("no CSPRNG for the OAEP seed")
-        }
+        None => raise @moon_mysql.ProtocolError("no CSPRNG for the OAEP seed")
       }
       let token = @moon_mysql.caching_sha2_full_auth_token(pw, nonce, pem, seed)
       self.write_packet(self.seq + 1, token)
-      self.expect_ok_or_err(self.read_packet())
+      expect_ok_or_err(self.read_packet())
     }
-    other => {
-      self.tcp.close()
+    other =>
       raise @moon_mysql.ProtocolError(
         "caching_sha2: unexpected status " + other.to_string(),
       )
-    }
   }
 }
 
 ///|
 /// A terminal auth packet must be OK (success) or ERR (raise); anything else is a
 /// protocol violation.
-fn MysqlConn::expect_ok_or_err(
-  self : MysqlConn,
-  pkt : Bytes,
-) -> Unit raise @moon_mysql.MysqlError {
+fn expect_ok_or_err(pkt : Bytes) -> Unit raise @moon_mysql.MysqlError {
   if @moon_mysql.is_err_packet(pkt) {
     raise @moon_mysql.parse_err(pkt)
   }
   if @moon_mysql.is_ok_packet(pkt) {
     return
   }
-  self.tcp.close()
-  raise @moon_mysql.ProtocolError("unexpected packet after caching_sha2 auth")
+  raise @moon_mysql.ProtocolError("unexpected packet after auth")
 }
 
 ///|
@@ -236,6 +238,11 @@ priv enum Outcome {
 async fn MysqlConn::command(self : MysqlConn, query_bytes : Bytes) -> Outcome {
   if self.closed {
     raise @moondb.Closed
+  }
+  if self.streaming {
+    raise @moon_mysql.ProtocolError(
+      "a query stream is still open on this connection; drain it or call close() before the next command",
+    )
   }
   let payload = Buffer()
   payload.write_byte(b'\x03') // COM_QUERY
@@ -342,6 +349,11 @@ pub async fn MysqlConn::query_stream(
   if self.closed {
     raise @moondb.Closed
   }
+  if self.streaming {
+    raise @moon_mysql.ProtocolError(
+      "a query stream is still open on this connection; drain it or call close() first",
+    )
+  }
   let payload = Buffer()
   payload.write_byte(b'\x03') // COM_QUERY
   payload.write_bytes(@moon_mysql.bind_params(sql, params)[:])
@@ -374,6 +386,7 @@ pub async fn MysqlConn::query_stream(
   } else {
     Some(after_columns)
   }
+  self.streaming = true
   { conn: self, columns, pending, done: false }
 }
 
@@ -392,14 +405,21 @@ pub async fn MysqlRowStream::next(self : MysqlRowStream) -> @moondb.Row? {
     None => self.conn.read_packet()
   }
   if @moon_mysql.is_err_packet(packet) {
-    self.done = true
+    self.finish()
     raise @moon_mysql.parse_err(packet)
   }
   if @moon_mysql.is_eof_packet(packet) {
-    self.done = true
+    self.finish()
     return None
   }
   Some(@moon_mysql.build_text_rows(self.columns, [packet])[0])
+}
+
+///|
+/// Mark the stream done and release the connection's streaming guard.
+fn MysqlRowStream::finish(self : MysqlRowStream) -> Unit {
+  self.done = true
+  self.conn.streaming = false
 }
 
 ///|
@@ -416,7 +436,7 @@ pub async fn MysqlRowStream::close(self : MysqlRowStream) -> Unit {
       break
     }
   }
-  self.done = true
+  self.finish()
 }
 
 ///|

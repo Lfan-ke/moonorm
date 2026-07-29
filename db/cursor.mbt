@@ -16,6 +16,12 @@
 /// falls back to an [`ArrayCursor`] over a materialised result, which honours the
 /// same interface without the memory bound.
 ///
+/// A live cursor holds a resource (a prepared statement, a busy connection). MoonBit
+/// has no finalizer to reclaim it, so a driver-backed cursor MUST be fully drained
+/// (`next` until `None`) or `close`d — abandoning it leaks the statement or leaves
+/// the connection mid-result. The materialised [`ArrayCursor`] holds nothing and is
+/// safe to drop.
+///
 /// `pub(open)` so out-of-tree drivers implement it.
 pub(open) trait Cursor {
   /// Advance and return the next row, or `None` at the end of the result.

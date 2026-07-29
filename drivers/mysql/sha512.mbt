@@ -47,7 +47,7 @@ pub fn sha512(msg : Bytes) -> Bytes {
   let mut h5 : UInt64 = 0x9B05688C2B3E6C1FUL
   let mut h6 : UInt64 = 0x1F83D9ABFB41BD6BUL
   let mut h7 : UInt64 = 0x5BE0CD19137E2179UL
-  let bitlen = (msg.length() * 8).to_uint64()
+  let bitlen = msg.length().to_uint64() * 8UL
   let buf = Buffer()
   buf.write_bytes(msg[:])
   buf.write_byte(b'\x80')

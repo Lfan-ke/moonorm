@@ -75,10 +75,13 @@ pub fn Session::fetch(
 
 ///|
 /// Stream a raw query's rows through a [`@moondb.Cursor`] instead of materialising
-/// them — the bounded-memory counterpart to [`query`], for result sets too large to
-/// hold at once (SQLAlchemy's `stream_results`). A driver with incremental fetch
-/// (moon-sqlite, the async wire drivers) yields rows lazily; others fall back to a
-/// cursor over a materialised array.
+/// them — the bounded-memory counterpart to [`query`] (SQLAlchemy's
+/// `stream_results`). This seam is synchronous, so only a synchronous driver with
+/// incremental fetch streams lazily here: moon-sqlite steps its prepared statement
+/// row by row. The async wire drivers cannot stream through this sync seam (their
+/// cursor is async) — a `Session` over Postgres raises (the async-wall façade) and
+/// over MySQL falls back to a materialised cursor; for true lazy Postgres/MySQL
+/// streaming call `PgConn`/`MysqlConn::query_stream` directly under an event loop.
 pub fn Session::query_stream(
   self : Session,
   sql : String,
