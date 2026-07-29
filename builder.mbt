@@ -63,6 +63,67 @@ fn join(parts : Array[String], sep : String) -> String {
   out
 }
 
+///|
+/// A boolean predicate tree — the parameter-safe way to express arbitrary
+/// `AND`/`OR`/`NOT` groupings (SQLAlchemy's `and_()` / `or_()` / `not_()`), which the
+/// flat `where_`/`eq` API (always joined by `AND`) cannot. Every comparison binds its
+/// value as a placeholder, so a `(a = ? OR b = ?)` filter stays fully parameterised.
+/// Attach one to a query with `Select::where_pred`.
+pub(all) enum Predicate {
+  Cmp(col~ : String, op~ : String, val~ : Value)
+  InList(col~ : String, vals~ : Array[Value], negated~ : Bool)
+  And(Array[Predicate])
+  Or(Array[Predicate])
+  Not(Predicate)
+}
+
+///|
+/// Render a predicate to its SQL fragment and the values it binds, in text order. A
+/// multi-child `And`/`Or` is wrapped in parentheses so nesting composes correctly.
+pub fn Predicate::build(self : Predicate) -> (String, Array[Value]) {
+  match self {
+    Cmp(col~, op~, val~) => (col + " " + op + " ?", [val])
+    InList(col~, vals~, negated~) => {
+      let kw = if negated { " NOT IN (" } else { " IN (" }
+      if vals.length() == 0 {
+        (col + kw + "NULL)", [])
+      } else {
+        let ph : Array[String] = []
+        for _v in vals {
+          ph.push("?")
+        }
+        (col + kw + join(ph, ", ") + ")", vals)
+      }
+    }
+    And(ps) => predicate_combine(ps, " AND ")
+    Or(ps) => predicate_combine(ps, " OR ")
+    Not(p) => {
+      let (s, pa) = p.build()
+      ("NOT (" + s + ")", pa)
+    }
+  }
+}
+
+///|
+/// Join child predicates with `sep`, wrapping the group in parentheses when it has
+/// more than one child, and concatenating their bound values in text order.
+fn predicate_combine(
+  ps : Array[Predicate],
+  sep : String,
+) -> (String, Array[Value]) {
+  let parts : Array[String] = []
+  let params : Array[Value] = []
+  for p in ps {
+    let (s, pa) = p.build()
+    parts.push(s)
+    for v in pa {
+      params.push(v)
+    }
+  }
+  let body = join(parts, sep)
+  (if parts.length() > 1 { "(" + body + ")" } else { body }, params)
+}
+
 // ---- SELECT ----
 
 ///|
@@ -108,6 +169,7 @@ pub struct Select {
   conds : Array[Cond]
   in_conds : Array[InCond]
   sub_conds : Array[SubCond]
+  preds : Array[Predicate]
   groups : Array[String]
   havings : Array[Cond]
   orders : Array[(String, Order)]
@@ -130,6 +192,7 @@ pub fn select(table : String) -> Select {
     conds: [],
     in_conds: [],
     sub_conds: [],
+    preds: [],
     groups: [],
     havings: [],
     orders: [],
@@ -287,6 +350,17 @@ pub fn Select::eq(self : Select, col : String, val : Value) -> Select {
 }
 
 ///|
+/// Add a boolean `Predicate` tree to the `WHERE` — the parameter-safe `AND`/`OR`/`NOT`
+/// grouping the flat `where_`/`eq` cannot express, e.g.
+/// `where_pred(Or([Cmp(col="a", op="=", val=Int(1)), Cmp(col="b", op="=", val=Int(2))]))`.
+/// Predicates are ANDed with the other clauses, so mixing `eq(...)` and `where_pred(...)`
+/// composes as one conjunction.
+pub fn Select::where_pred(self : Select, pred : Predicate) -> Select {
+  self.preds.push(pred)
+  self
+}
+
+///|
 /// Attach a common table expression: `WITH name AS (sub)`. Repeatable — several
 /// CTEs render comma-separated in one leading `WITH`. The subquery is parameterised
 /// like any other statement; its bound values lead the final params list because
@@ -396,7 +470,8 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
   }
   if self.conds.length() > 0 ||
     self.in_conds.length() > 0 ||
-    self.sub_conds.length() > 0 {
+    self.sub_conds.length() > 0 ||
+    self.preds.length() > 0 {
     let cparts : Array[String] = []
     for c in self.conds {
       cparts.push(c.col + " " + c.op + " ?")
@@ -419,6 +494,13 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
       let (sub_sql, sub_params) = sc.sub.build()
       cparts.push(sc.col + " " + sc.op + " (" + sub_sql + ")")
       for p in sub_params {
+        params.push(p)
+      }
+    }
+    for pred in self.preds {
+      let (ps, pp) = pred.build()
+      cparts.push(ps)
+      for p in pp {
         params.push(p)
       }
     }
