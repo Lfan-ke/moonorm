@@ -599,3 +599,17 @@ pub fn[S, T] Session::load_one_batch(
 pub fn Session::close(self : Session) -> Unit {
   self.driver.close()
 }
+
+///|
+/// Eagerly load the related records of a many-to-many relationship: run the
+/// junction JOIN for `source` and decode every matching target row. The N:M
+/// counterpart of `Session::load`, and like it the source key is bound, so eager
+/// loading stays injection-safe.
+pub fn[S, T] Session::load_many(
+  self : Session,
+  source : S,
+  rel : ManyToMany[S, T],
+) -> Array[T] raise @moondb.DbError {
+  let (sql, params) = rel.query(source).build()
+  rel.target.map_rows(self.driver.query(sql, params))
+}

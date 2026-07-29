@@ -373,3 +373,59 @@ pub fn[S, T] Relation::batch_query(
   }
   self.target.select().where_in_values(self.key_column, keys)
 }
+
+///|
+/// A many-to-many relationship from a source `S` to a `target` `T` through a
+/// `junction` (association) table — SQLAlchemy's `relationship(secondary=...)`. The
+/// junction's `source_fk` column matches a key extracted from the source, and its
+/// `target_fk` column matches the target's `target_key`. Resolving the relationship
+/// JOINs the target through the junction. Load it with `Session::load_many`; like the
+/// 1:N / N:1 relations, MoonBit's lack of attribute interception makes the load an
+/// explicit call rather than a lazy attribute access.
+pub struct ManyToMany[S, T] {
+  target : Model[T]
+  junction : String
+  source_fk : String
+  target_fk : String
+  target_key : String
+  source_key : (S) -> Value
+}
+
+///|
+/// Define a many-to-many relationship through `junction`. `source_fk` / `target_fk`
+/// are the junction columns pointing at the source key and the `target_key`.
+pub fn[S, T] many_to_many(
+  target : Model[T],
+  junction~ : String,
+  source_fk~ : String,
+  target_fk~ : String,
+  target_key~ : String,
+  source_key~ : (S) -> Value,
+) -> ManyToMany[S, T] {
+  { target, junction, source_fk, target_fk, target_key, source_key }
+}
+
+///|
+/// The `Select` resolving this relationship for a `source`: the target rows joined to
+/// the junction on `junction.target_fk = target.target_key`, filtered to
+/// `junction.source_fk = ?` with the source key bound (never spliced). The target
+/// columns are projected qualified (`target.col`) so a same-named junction column
+/// never makes the projection ambiguous. `Session::load_many` runs it and maps.
+pub fn[S, T] ManyToMany::query(self : ManyToMany[S, T], source : S) -> Select {
+  let s = select(self.target.table)
+  for c in self.target.columns {
+    s.cols.push(self.target.table + "." + c.name)
+  }
+  s
+  .join(
+    self.junction,
+    self.junction +
+    "." +
+    self.target_fk +
+    " = " +
+    self.target.table +
+    "." +
+    self.target_key,
+  )
+  .where_(self.junction + "." + self.source_fk, "=", (self.source_key)(source))
+}
