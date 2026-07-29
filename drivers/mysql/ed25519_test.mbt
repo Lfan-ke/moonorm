@@ -1,0 +1,33 @@
+// Copyright 2026 Leo Cheng
+// SPDX-License-Identifier: Apache-2.0
+
+///|
+test "sha512 matches the NIST 'abc' vector" {
+  assert_eq(
+    hex(sha512(b"abc")),
+    "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+  )
+}
+
+///|
+test "mariadb client_ed25519 signs the challenge to the reference vector" {
+  // password "pencil", 32-byte scramble 00..1f; the expected public key and
+  // signature were produced by MariaDB's scheme (az = SHA512(password)) and
+  // cross-verified as a valid Ed25519 signature by the `cryptography` library.
+  let scr = FixedArray::make(32, b'\x00')
+  for i in 0..<32 {
+    scr[i] = i.to_byte()
+  }
+  let sig = mariadb_ed25519_response(
+    b"pencil",
+    scr.unsafe_reinterpret_as_bytes(),
+  )
+  assert_eq(
+    hex(sig),
+    "439294572414f2d0088571388ae40a7c5268c182c6e19b96c9cf70a66bf8eee1866f1609b34cf21b96d5bda0c47a4937ed8be656a2c2c95c597373fca1eeaf0b",
+  )
+  assert_eq(
+    mariadb_ed25519_response(b"", scr.unsafe_reinterpret_as_bytes()).length(),
+    0,
+  )
+}
