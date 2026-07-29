@@ -286,3 +286,18 @@ pub fn diff_schema(
   }
   out
 }
+
+///|
+/// Render a `CREATE INDEX` statement (SQLAlchemy's `Index` / `index=True`). With
+/// `unique=true` it is a `CREATE UNIQUE INDEX`; multiple `columns` make a composite
+/// index. Names are trusted identifiers, never bound. Pair it with a `Migration`'s
+/// `up`, and a `DROP INDEX` in its `down`.
+pub fn index_ddl(
+  name : String,
+  table : String,
+  columns : Array[String],
+  unique? : Bool = false,
+) -> String {
+  let kw = if unique { "CREATE UNIQUE INDEX " } else { "CREATE INDEX " }
+  kw + name + " ON " + table + " (" + join(columns, ", ") + ")"
+}
