@@ -62,6 +62,9 @@ pub(all) struct Column {
   name : String
   col_type : ColumnType
   primary_key : Bool
+  // A server-generated key (SQLAlchemy `autoincrement` / SERIAL / AUTO_INCREMENT).
+  // On SQLite, an autoincrement primary key renders `INTEGER PRIMARY KEY AUTOINCREMENT`.
+  autoincrement : Bool
   nullable : Bool
   unique : Bool
   // A DDL `DEFAULT` expression (SQLAlchemy `server_default`), e.g. `"0"` or
@@ -87,6 +90,7 @@ pub fn column(
   name : String,
   col_type : ColumnType,
   primary_key? : Bool = false,
+  autoincrement? : Bool = false,
   nullable? : Bool = true,
   unique? : Bool = false,
   default? : String? = None,
@@ -99,6 +103,7 @@ pub fn column(
     name,
     col_type,
     primary_key,
+    autoincrement,
     nullable,
     unique,
     default,
@@ -119,6 +124,9 @@ pub fn Column::ddl(self : Column, inline_pk? : Bool = true) -> String {
   let mut s = self.name + " " + self.col_type.sql()
   if self.primary_key && inline_pk {
     s = s + " PRIMARY KEY"
+    if self.autoincrement {
+      s = s + " AUTOINCREMENT"
+    }
   } else if self.primary_key || !self.nullable {
     // A primary-key column is NOT NULL; when the key is a table-level constraint
     // (composite key, `inline_pk=false`) the column still carries NOT NULL.
@@ -178,6 +186,7 @@ pub fn[T] field(
   col_type : ColumnType,
   encode : (T) -> Value,
   primary_key? : Bool = false,
+  autoincrement? : Bool = false,
   nullable? : Bool = true,
   unique? : Bool = false,
   default? : String? = None,
@@ -191,6 +200,7 @@ pub fn[T] field(
       name,
       col_type,
       primary_key,
+      autoincrement,
       nullable,
       unique,
       default,
