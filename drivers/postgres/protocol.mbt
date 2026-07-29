@@ -103,6 +103,26 @@ pub fn build_password(token : String) -> Bytes {
 }
 
 ///|
+/// SASLInitialResponse ('p'): the chosen `mechanism` name, then the length-prefixed
+/// client-first SCRAM message (PG protocol §55.2.1).
+pub fn build_sasl_initial(mechanism : String, client_first : String) -> Bytes {
+  let w = MsgWriter::new()
+  w.cstring(mechanism)
+  let cf = @utf8.encode(client_first)
+  w.i32(cf.length())
+  w.raw(cf)
+  frame(b'p', w.to_bytes())
+}
+
+///|
+/// SASLResponse ('p'): the raw client-final SCRAM message, no length prefix.
+pub fn build_sasl_response(client_final : String) -> Bytes {
+  let w = MsgWriter::new()
+  w.raw(@utf8.encode(client_final))
+  frame(b'p', w.to_bytes())
+}
+
+///|
 /// Simple Query ('Q'): one SQL string, no bound parameters.
 pub fn build_query(sql : String) -> Bytes {
   let w = MsgWriter::new()

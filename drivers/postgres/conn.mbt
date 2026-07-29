@@ -103,10 +103,7 @@ async fn PgConn::run_startup(
               build_password(pg_md5_password(user, password, salt)),
             )
           }
-          10 =>
-            raise @moondb.ConnectError(
-              "SASL/SCRAM-SHA-256 auth is not yet implemented (roadmap); use md5 or trust auth",
-            )
+          10 => self.run_sasl(password, r)
           other =>
             raise @moondb.ConnectError(
               "unsupported authentication request \{other}",
@@ -121,6 +118,72 @@ async fn PgConn::run_startup(
       _ => ()
     }
   }
+}
+
+///|
+/// SCRAM-SHA-256 SASL exchange (RFC 5802/7677 + PG protocol §55.3), entered from
+/// an AuthenticationSASL message whose offered-mechanism list is read from `mechs`.
+/// Sends the client-first message with a CSPRNG nonce, derives the client-final
+/// proof from the server's challenge, and verifies the server signature before
+/// returning; the caller's loop then consumes AuthenticationOk. The password is
+/// used as-is (SASLprep is a no-op for the ASCII passwords in practice).
+async fn PgConn::run_sasl(
+  self : PgConn,
+  password : String,
+  mechs : ByteReader,
+) -> Unit raise DbError {
+  let mut scram = false
+  for ;; {
+    let m = mechs.cstring()
+    if m == "" {
+      break
+    }
+    if m == "SCRAM-SHA-256" {
+      scram = true
+    }
+  }
+  guard scram else {
+    raise @moondb.ConnectError("server offers no SCRAM-SHA-256 SASL mechanism")
+  }
+  let entropy = match @env.rand(18) {
+    Some(b) => b
+    None => raise @moondb.ConnectError("no CSPRNG for the SCRAM client nonce")
+  }
+  let client_first_bare = "n=,r=" + base64_encode(entropy)
+  self.write_all(build_sasl_initial("SCRAM-SHA-256", "n,," + client_first_bare))
+  let server_first = self.read_sasl_message(11)
+  let (client_final, want_sig) = scram_client_final(
+    @utf8.encode(password),
+    client_first_bare,
+    server_first,
+  )
+  self.write_all(build_sasl_response(client_final))
+  let server_final = self.read_sasl_message(12)
+  guard server_final == "v=" + base64_encode(want_sig) else {
+    raise @moondb.ConnectError("SCRAM server signature mismatch")
+  }
+}
+
+///|
+/// Read the next backend message, require Authentication ('R') with SASL status
+/// `want` (11 = SASLContinue, 12 = SASLFinal), and return its trailing bytes as
+/// text — the server-first or server-final SCRAM message.
+async fn PgConn::read_sasl_message(
+  self : PgConn,
+  want : Int,
+) -> String raise DbError {
+  let (tag, payload) = self.read_message()
+  if tag == 69 {
+    raise @moondb.ConnectError(parse_error_response(payload))
+  }
+  guard tag == 82 else {
+    raise @moondb.ConnectError("protocol: expected Authentication during SASL")
+  }
+  let r = ByteReader::new(payload)
+  guard r.i32() == want else {
+    raise @moondb.ConnectError("protocol: unexpected SASL authentication code")
+  }
+  utf8_decode(r.take(payload.length() - 4))
 }
 
 ///|
