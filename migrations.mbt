@@ -241,3 +241,48 @@ pub fn reflect_table(
 ) -> Array[Column] raise @moondb.DbError {
   reflect_columns(driver.query("PRAGMA table_info(" + table + ")", []))
 }
+
+///|
+/// One difference between a declared schema and a reflected one (Alembic-autogenerate
+/// style): a column `Added` in the model but absent in the database, one `Removed`
+/// from the model but still present, or one whose `TypeChanged`. Compared by column
+/// name; ordering follows the declared columns, then the leftover reflected ones.
+pub(all) enum ColumnDiff {
+  Added(name~ : String, col_type~ : ColumnType)
+  Removed(String)
+  TypeChanged(name~ : String, from~ : ColumnType, to~ : ColumnType)
+} derive(Eq)
+
+///|
+/// The first column named `name`, or `None`.
+fn find_col(cols : Array[Column], name : String) -> Column? {
+  cols.iter().find_first(fn(c) { c.name == name })
+}
+
+///|
+/// Diff a model's `declared` columns against the `reflected` ones from a live table:
+/// declared-only columns are `Added`, reflected-only are `Removed`, and a name in
+/// both with a different `col_type` is `TypeChanged`. An empty result means the table
+/// matches the model. This is the write half of autogenerate — feed the diff to DDL
+/// to synthesise the migration.
+pub fn diff_schema(
+  declared : Array[Column],
+  reflected : Array[Column],
+) -> Array[ColumnDiff] {
+  let out : Array[ColumnDiff] = []
+  for d in declared {
+    match find_col(reflected, d.name) {
+      Some(r) =>
+        if d.col_type != r.col_type {
+          out.push(TypeChanged(name=d.name, from=r.col_type, to=d.col_type))
+        }
+      None => out.push(Added(name=d.name, col_type=d.col_type))
+    }
+  }
+  for r in reflected {
+    if find_col(declared, r.name) is None {
+      out.push(Removed(r.name))
+    }
+  }
+  out
+}
