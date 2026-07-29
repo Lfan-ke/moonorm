@@ -401,3 +401,71 @@ jobs:
       - name: lint (fmt is clean)
         run: |
           moon fmt && git diff --exit-code
+
+  # MariaDB's client_ed25519 plugin. We create an account that authenticates VIA
+  # ed25519 and run the same round trip as it: the server drives an
+  # AuthSwitchRequest to client_ed25519 with a 32-byte nonce, and the driver signs
+  # it with the password-keyed Ed25519 secret. A wrong signature fails the login,
+  # so a green job proves the whole path.
+  mariadb-ed25519:
+    name: moon-mysql (client_ed25519, live MariaDB 11)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: drivers/mysql
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: start mariadb 11
+        run: |
+          docker run -d --name mariadb \
+            -e MARIADB_ROOT_PASSWORD=root \
+            -e MYSQL_ROOT_HOST=% \
+            -e MARIADB_DATABASE=test \
+            -p 3306:3306 \
+            mariadb:11
+
+      - name: install moon
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> $GITHUB_PATH
+
+      - name: post install
+        run: |
+          moon version --all
+          moon update
+
+      - name: wait for mariadb and create an ed25519 account
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec mariadb mariadb-admin ping -uroot -proot --silent 2>/dev/null; then
+              echo "mariadb is up"; break
+            fi
+            echo "waiting for mariadb... ($i)"; sleep 2
+          done
+          sleep 3
+          docker exec mariadb mariadb -uroot -proot -e "INSTALL SONAME 'auth_ed25519';" || true
+          docker exec mariadb mariadb -uroot -proot -e "CREATE USER 'edtest'@'%' IDENTIFIED VIA ed25519 USING PASSWORD('edpass'); GRANT ALL PRIVILEGES ON *.* TO 'edtest'@'%'; FLUSH PRIVILEGES;"
+          docker exec mariadb mariadb -uroot -proot -e "SELECT user, plugin FROM mysql.user WHERE user='edtest';"
+
+      - name: moon check
+        run: moon check --target all --deny-warn
+
+      - name: moon build
+        run: moon build --target all
+
+      - name: moon test (round trip authenticating VIA client_ed25519)
+        env:
+          MYSQL_TEST: "1"
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: "edtest"
+          MYSQL_PASSWORD: "edpass"
+          MYSQL_DB: "test"
+        run: moon test --target all
+
+      - name: lint (fmt is clean)
+        run: |
+          moon fmt && git diff --exit-code

@@ -130,11 +130,22 @@ pub async fn MysqlConn::connect(
       conn.finish_caching_sha2(pw, new_salt, conn.read_packet())
       return conn
     }
+    if plugin == "client_ed25519" {
+      // MariaDB signs the raw 32-byte nonce (not the NUL-stripped salt) with the
+      // password-keyed Ed25519 secret.
+      let nonce = @moon_mysql.parse_ed25519_challenge(auth)
+      conn.write_packet(
+        conn.seq + 1,
+        @moon_mysql.mariadb_ed25519_response(pw, nonce),
+      )
+      conn.expect_ok_or_err(conn.read_packet())
+      return conn
+    }
     conn.tcp.close()
     raise @moon_mysql.UnsupportedError(
       "server requested auth-switch to '" +
       plugin +
-      "'; only mysql_native_password and caching_sha2_password are implemented (client_ed25519 is on the README roadmap)",
+      "'; only mysql_native_password, caching_sha2_password and client_ed25519 are implemented",
     )
   }
   // AuthMoreData (lead byte 0x01): the caching_sha2 reply to the fast scramble we

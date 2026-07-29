@@ -269,6 +269,18 @@ pub fn is_auth_switch_request(payload : Bytes) -> Bool {
 }
 
 ///|
+/// The 32-byte nonce from a `client_ed25519` AuthSwitchRequest. MariaDB sends
+/// exactly `NONCE_BYTES` (= 32) with no NUL terminator and the client signs all of
+/// them, so — unlike the native scramble — the full 32 bytes are read raw rather
+/// than through the NUL-stripping [`parse_auth_switch_request`].
+pub fn parse_ed25519_challenge(payload : Bytes) -> Bytes raise MysqlError {
+  let r = PacketReader::new(payload)
+  let _ = r.u8() // 0xFE
+  let _ = r.string_nul() // plugin name
+  r.bytes(32)
+}
+
+///|
 /// Decode an AuthSwitchRequest into the plugin name the server wants and the fresh
 /// 20-byte auth salt for it. The trailing NUL that follows the scramble is
 /// dropped so the salt feeds [`native_password_scramble`] directly.
