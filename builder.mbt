@@ -196,7 +196,27 @@ pub struct Select {
   mut distinct_ : Bool
   mut limit_ : Int?
   mut offset_ : Int?
+  // Row-locking clause (SQLAlchemy `.with_for_update()`); `None` = no locking.
+  mut lock_ : LockClause?
 }
+
+///|
+/// The kind of row lock a `FOR UPDATE` / `FOR SHARE` clause takes.
+pub(all) enum LockMode {
+  ForUpdate
+  ForShare
+} derive(Eq, Debug)
+
+///|
+/// A row-locking clause on a `SELECT` (SQLAlchemy `with_for_update`): the lock
+/// `mode`, the tables it is restricted to (`OF …`, empty = all), and whether it
+/// fails rather than waits (`NOWAIT`) or skips locked rows (`SKIP LOCKED`).
+pub(all) struct LockClause {
+  mode : LockMode
+  of : Array[String]
+  nowait : Bool
+  skip_locked : Bool
+} derive(Eq, Debug)
 
 ///|
 /// Start a SELECT over `table`.
@@ -217,7 +237,34 @@ pub fn select(table : String) -> Select {
     distinct_: false,
     limit_: None,
     offset_: None,
+    lock_: None,
   }
+}
+
+///|
+/// Take a row lock on the selected rows (SQLAlchemy `Select.with_for_update`): `FOR UPDATE` by
+/// default, or `FOR SHARE` when `read`; restrict it to certain tables with `of`; make it fail
+/// immediately on a locked row with `nowait`, or skip locked rows with `skip_locked`. The clause is
+/// emitted after `ORDER BY` / `LIMIT` / `OFFSET`, the standard SQL position (SQLite, which has no
+/// row locks, ignores it).
+pub fn Select::for_update(
+  self : Select,
+  read? : Bool = false,
+  of? : Array[String] = [],
+  nowait? : Bool = false,
+  skip_locked? : Bool = false,
+) -> Select {
+  self.lock_ = Some({
+    mode: if read {
+      ForShare
+    } else {
+      ForUpdate
+    },
+    of,
+    nowait,
+    skip_locked,
+  })
+  self
 }
 
 ///|
@@ -590,7 +637,30 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
     Some(n) => sql = sql + " OFFSET " + n.to_string()
     None => ()
   }
+  match self.lock_ {
+    Some(lock) => sql = sql + " " + lock_sql(lock)
+    None => ()
+  }
   (sql, params)
+}
+
+///|
+/// The SQL text of a row-locking clause: `FOR UPDATE`/`FOR SHARE`, an optional `OF a, b`, and a
+/// trailing `NOWAIT` or `SKIP LOCKED`.
+fn lock_sql(lock : LockClause) -> String {
+  let mut s = match lock.mode {
+    ForUpdate => "FOR UPDATE"
+    ForShare => "FOR SHARE"
+  }
+  if lock.of.length() > 0 {
+    s = s + " OF " + join(lock.of, ", ")
+  }
+  if lock.nowait {
+    s = s + " NOWAIT"
+  } else if lock.skip_locked {
+    s = s + " SKIP LOCKED"
+  }
+  s
 }
 
 ///|
