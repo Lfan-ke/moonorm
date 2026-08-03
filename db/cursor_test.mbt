@@ -28,7 +28,7 @@ test "ArrayCursor advances in order then reports exhaustion" {
   ])
   let first = cur.next()
   assert_eq(first is Some(_), true)
-  guard first is Some(r0)
+  guard first is Some(r0) else { fail("cursor should yield a first row") }
   assert_eq(r0.values[0] == Int(10), true)
   assert_eq(cur.next() is Some(_), true)
   assert_eq(cur.next() is None, true)
