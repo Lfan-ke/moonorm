@@ -173,7 +173,9 @@ test "ERR packet: decoded into ServerError with code and sqlstate" {
   buf.write_bytes(b"42S02"[:])
   buf.write_bytes(b"Table 'test.t' doesn't exist"[:])
   let e = parse_err(buf.to_bytes())
-  guard e is ServerError(code, state, msg)
+  guard e is ServerError(code, state, msg) else {
+    fail("parse_err should decode an ERR packet as a ServerError")
+  }
   assert_eq(code, 1146)
   assert_eq(state, "42S02")
   assert_eq(msg, "Table 'test.t' doesn't exist")
