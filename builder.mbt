@@ -170,10 +170,13 @@ struct InCond {
 ///|
 /// A common table expression: `name AS (subquery)`. CTEs render in a single leading
 /// `WITH` clause and their bound parameters come first in the final params list,
-/// matching their leading position in the SQL text.
+/// matching their leading position in the SQL text. When `recursive`, the whole
+/// clause is a `WITH RECURSIVE` (the keyword modifies the clause, not the entry, so
+/// one recursive CTE turns the leading `WITH` recursive for all of them).
 struct Cte {
   name : String
   sub : Select
+  recursive : Bool
 }
 
 ///|
@@ -433,7 +436,27 @@ pub fn Select::where_pred(self : Select, pred : Predicate) -> Select {
 /// the `WITH` clause leads the SQL text. `name` is a trusted identifier declared in
 /// code, never a bound value.
 pub fn Select::with_cte(self : Select, name : String, sub : Select) -> Select {
-  self.ctes.push({ name, sub })
+  self.ctes.push({ name, sub, recursive: false })
+  self
+}
+
+///|
+/// Attach a recursive common table expression (SQLAlchemy's `select(...).cte(recursive=True)`):
+/// `WITH RECURSIVE name AS (anchor UNION [ALL] step)`. `anchor` is the base term and `step`
+/// the term that refers back to `name` in its own `FROM` — the CTE name is a trusted identifier
+/// referenceable in `step` and in this query's own `FROM`, so the usual shape is
+/// `select(name).with_recursive(name, anchor, step)`. `all` picks `UNION ALL` (keep duplicates,
+/// the common tree/graph walk) over the default `UNION`. The two terms compose through the existing
+/// `union` / `union_all` builders, so their bound values thread through in text order like any CTE.
+pub fn Select::with_recursive(
+  self : Select,
+  name : String,
+  anchor : Select,
+  step : Select,
+  all? : Bool = false,
+) -> Select {
+  let sub = if all { anchor.union_all(step) } else { anchor.union(step) }
+  self.ctes.push({ name, sub, recursive: true })
   self
 }
 
@@ -529,14 +552,19 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
   let mut sql = ""
   if self.ctes.length() > 0 {
     let cte_parts : Array[String] = []
+    let mut recursive = false
     for cte in self.ctes {
+      recursive = recursive || cte.recursive
       let (sub_sql, sub_params) = cte.sub.build()
       cte_parts.push(cte.name + " AS (" + sub_sql + ")")
       for p in sub_params {
         params.push(p)
       }
     }
-    sql = "WITH " + join(cte_parts, ", ") + " "
+    sql = "WITH " +
+      (if recursive { "RECURSIVE " } else { "" }) +
+      join(cte_parts, ", ") +
+      " "
   }
   sql = sql +
     "SELECT " +

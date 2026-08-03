@@ -77,6 +77,44 @@ test "builder: a CTE combined with a subquery predicate keeps params in text ord
   assert_eq(params[2] == Int(3), true)
 }
 
+///|
+test "builder: WITH RECURSIVE UNION ALL walks a counter and leads with its params" {
+  let anchor = select("seed").column("n").where_("n", "=", Int(233))
+  let step = select("cnt").column("n + 1").where_("n", "<", Int(66666))
+  let (sql, params) = select("cnt")
+    .with_recursive("cnt", anchor, step, all=true)
+    .column("n")
+    .build()
+  assert_eq(
+    sql, "WITH RECURSIVE cnt AS (SELECT n FROM seed WHERE n = ? UNION ALL SELECT n + 1 FROM cnt WHERE n < ?) SELECT n FROM cnt",
+  )
+  // Anchor bound value (233) first, recursive term (66666) next — both lead the
+  // outer query because the WITH clause leads the SQL text.
+  assert_eq(params.length(), 2)
+  assert_eq(params[0] == Int(233), true)
+  assert_eq(params[1] == Int(66666), true)
+}
+
+///|
+test "builder: WITH RECURSIVE UNION references the CTE name in the recursive term's JOIN" {
+  let roots = select("org")
+    .column("id")
+    .column("parent_id")
+    .where_("parent_id", "=", Null)
+  let branch = select("org")
+    .column("org.id")
+    .column("org.parent_id")
+    .join("tree", "org.parent_id = tree.id")
+  let (sql, _) = select("tree")
+    .with_recursive("tree", roots, branch)
+    .column("id")
+    .column("parent_id")
+    .build()
+  assert_eq(
+    sql, "WITH RECURSIVE tree AS (SELECT id, parent_id FROM org WHERE parent_id IS NULL UNION SELECT org.id, org.parent_id FROM org JOIN tree ON org.parent_id = tree.id) SELECT id, parent_id FROM tree",
+  )
+}
+
 // --- Optimistic lock -----------------------------------------------------------
 
 ///|
