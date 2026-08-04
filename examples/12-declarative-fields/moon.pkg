@@ -1,0 +1,6 @@
+import {
+  "Lfan-ke/moonorm",
+  "Lfan-ke/moondb",
+}
+
+pkgtype(kind: "executable")
