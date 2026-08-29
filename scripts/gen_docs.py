@@ -32,8 +32,51 @@ SECTIONS = [
      "applies pending versions ascending, is idempotent on re-run, rolls back to a "
      "target version descending, and reports the current version. The Alembic / "
      "diesel-migrations counterpart, run over any @moondb.Driver."),
+    ("session_pool", "session_pool.mbt", "Pooled sessions",
+     "Session::with_pool borrows a connection for the duration of one call and "
+     "returns it with defer, so it comes back on every path including a raise or a "
+     "cancellation."),
+    ("driver", "db/driver.mbt", "Driver seam",
+     "The @moondb contract every backend implements - execute, query, ping, close, "
+     "and the transaction verbs. moonorm reaches nothing past this seam, which is "
+     "what lets one Session drive SQLite, Postgres, MySQL or MockDriver."),
+    ("pool", "db/pool.mbt", "Connection pool",
+     "A pool over any Driver: max_size ceiling, max_lifetime retirement, pre_ping "
+     "health probing, and an acquire budget. close_all is the graceful half of a "
+     "shutdown - nothing in flight is cut off, and in_use_count is what a drain "
+     "waits on."),
+    ("row", ("db/row.mbt", "db/cursor.mbt", "db/value.mbt"), "Rows and cursors",
+     "The typed row a query returns and the cursor that streams them, plus the "
+     "Value union every driver marshals to and from."),
+    ("error", "db/error.mbt", "Errors",
+     "DbError, the one error type the seam raises, so a caller distinguishes a "
+     "closed pool from a query failure without knowing which backend it is on."),
+    ("mock", "db/mock.mbt", "MockDriver",
+     "An in-memory Driver that records what it was asked to run, so the ORM's own "
+     "behaviour is testable on every backend without a database."),
+    ("sqlite", ("drivers/sqlite/sqlite.mbt", "drivers/sqlite/ffi.mbt"), "SQLite driver",
+     "The Driver over the vendored SQLite amalgamation — the only C in the "
+     "repository, kept behind the same seam every other backend meets."),
+    ("postgres", ("drivers/postgres/driver.mbt", "drivers/postgres/conn.mbt", "drivers/postgres/protocol.mbt",
+                  "drivers/postgres/value.mbt", "drivers/postgres/bytes.mbt", "drivers/postgres/placeholder.mbt",
+                  "drivers/postgres/aliases.mbt", "drivers/postgres/scram.mbt", "drivers/postgres/md5.mbt"),
+     "Postgres driver",
+     "The Postgres wire protocol in MoonBit: the startup and authentication "
+     "handshakes (SCRAM-SHA-256 and md5), the simple and extended query paths, "
+     "$n placeholders, and the type mapping to @moondb.Value."),
+    ("mysql", ("drivers/mysql/handshake.mbt", "drivers/mysql/packet.mbt", "drivers/mysql/response.mbt",
+               "drivers/mysql/binding.mbt", "drivers/mysql/error.mbt", "drivers/mysql/caching_sha2.mbt",
+               "drivers/mysql/ed25519.mbt", "drivers/mysql/sha1.mbt", "drivers/mysql/sha256.mbt",
+               "drivers/mysql/sha512.mbt"),
+     "MySQL and MariaDB driver",
+     "The MySQL wire protocol in MoonBit: the handshake and every authentication "
+     "plugin a modern server offers — native password, caching_sha2 including the "
+     "full RSA path on a cold cache, and MariaDB's client_ed25519 — plus packet "
+     "framing, prepared-statement binding and the error mapping."),
+    ("integration", ("integration/e2e.mbt", "integration/pool.mbt"), "Integration suite",
+     "The checks that run against published packages rather than the working tree: "
+     "what is on mooncakes.io actually works together."),
 ]
-
 KIND = {"struct": "struct", "enum": "enum", "fn": "fn", "type": "type", "let": "let"}
 
 
@@ -240,7 +283,8 @@ def main():
     for sid, rel, title, desc in SECTIONS:
         body.append('<section class="pkg" id="%s"><h2><span class="at">§</span>%s</h2>'
                     '<p class="pdesc">%s</p>' % (sid, title, esc(desc)))
-        for kind, sig, doc in parse(ROOT / rel):
+        files = rel if isinstance(rel, tuple) else (rel,)
+        for kind, sig, doc in [it for f in files for it in parse(ROOT / f)]:
             total += 1
             body.append('<div class="item" data-k="%s"><span class="kind">%s</span>'
                         '<pre class="sig">%s</pre>%s</div>'
