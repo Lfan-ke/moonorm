@@ -1,6 +1,6 @@
 name = "Lfan-ke/moon-sqlite"
 
-version = "0.2.0"
+version = "0.2.1"
 
 readme = "README.md"
 
@@ -23,5 +23,5 @@ description = "SQLite driver for moondb/moonorm — native FFI, amalgamation ven
 preferred_target = "native"
 
 import {
-  "Lfan-ke/moondb@0.1.5",
+  "Lfan-ke/moondb@0.1.6",
 }

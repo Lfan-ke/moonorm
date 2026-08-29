@@ -1,6 +1,6 @@
 name = "Lfan-ke/moon-postgres"
 
-version = "0.2.0"
+version = "0.2.1"
 
 readme = "README.md"
 
@@ -15,6 +15,6 @@ description = "Pure-MoonBit PostgreSQL wire-protocol driver implementing @moondb
 preferred_target = "native"
 
 import {
-  "Lfan-ke/moondb@0.1.5",
+  "Lfan-ke/moondb@0.1.6",
   "moonbitlang/async@0.20.3",
 }
