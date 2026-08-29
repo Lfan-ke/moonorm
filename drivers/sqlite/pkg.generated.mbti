@@ -1,0 +1,27 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Lfan-ke/moon-sqlite"
+
+import {
+  "Lfan-ke/moondb",
+}
+
+// Values
+
+// Errors
+
+// Types and methods
+type SqliteCursor
+pub impl @moondb.Cursor for SqliteCursor
+
+pub struct SqliteDriver {
+  handle : Int64
+  mut closed : Bool
+}
+pub fn SqliteDriver::exec_script(Self, String) -> Unit raise @moondb.DbError
+pub fn SqliteDriver::is_closed(Self) -> Bool
+pub fn SqliteDriver::open(String) -> Self raise @moondb.DbError
+pub impl @moondb.Driver for SqliteDriver
+
+// Type aliases
+
+// Traits

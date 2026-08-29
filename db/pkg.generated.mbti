@@ -1,0 +1,122 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Lfan-ke/moondb"
+
+// Values
+pub fn drain(&Cursor) -> Array[Row] raise DbError
+
+// Errors
+pub(all) suberror DbError {
+  ConnectError(String)
+  QueryError(String)
+  TypeError(String)
+  Closed
+}
+pub fn DbError::to_string(Self) -> String
+pub impl Show for DbError
+
+// Types and methods
+pub struct ArrayCursor {
+  rows : Array[Row]
+  mut pos : Int
+}
+pub fn ArrayCursor::new(Array[Row]) -> Self
+pub impl Cursor for ArrayCursor
+
+pub(all) struct ExecResult {
+  rows_affected : Int64
+  last_insert_id : Int64
+} derive(Eq)
+
+pub struct MockDriver {
+  mut rows : Array[Row]
+  mut next_id : Int64
+  savepoints : Array[Int]
+  mut closed : Bool
+}
+pub fn MockDriver::in_transaction(Self) -> Bool
+pub fn MockDriver::is_closed(Self) -> Bool
+pub fn MockDriver::new() -> Self
+pub fn MockDriver::row_count(Self) -> Int
+pub impl Driver for MockDriver
+
+pub struct Pool[D] {
+  make : () -> D raise DbError
+  idle : Array[(D, Int64)]
+  checked_out : Array[(D, Int64)]
+  mut open_count : Int
+  max_size : Int
+  max_lifetime_ms : Int64
+  pre_ping : Bool
+  acquire_timeout_ms : Int64
+  clock : () -> Int64
+  mut closed : Bool
+}
+pub fn[D : Driver] Pool::acquire(Self[D]) -> D raise DbError
+pub fn[D] Pool::acquire_timeout_ms(Self[D]) -> Int64
+pub fn[D : Driver] Pool::close_all(Self[D]) -> Unit
+pub fn[D] Pool::idle_count(Self[D]) -> Int
+pub fn[D] Pool::in_use_count(Self[D]) -> Int
+pub fn[D] Pool::is_closed(Self[D]) -> Bool
+pub fn[D] Pool::max_lifetime_ms(Self[D]) -> Int64
+pub fn[D] Pool::max_size(Self[D]) -> Int
+pub fn[D] Pool::new(() -> D raise DbError, max_size? : Int, max_lifetime_ms? : Int64, pre_ping? : Bool, acquire_timeout_ms? : Int64, clock? : () -> Int64) -> Self[D] raise DbError
+pub fn[D] Pool::open_count(Self[D]) -> Int
+pub fn[D] Pool::pre_ping(Self[D]) -> Bool
+pub fn[D : Driver] Pool::release(Self[D], D) -> Unit
+pub fn[D : Driver] Pool::try_acquire(Self[D]) -> D? raise DbError
+pub fn[D : Driver, R] Pool::with_conn(Self[D], (D) -> R raise DbError) -> R raise DbError
+
+pub(all) struct Row {
+  columns : Array[String]
+  values : Array[Value]
+}
+pub fn Row::blob(Self, Int) -> Bytes raise DbError
+pub fn Row::blob_by(Self, String) -> Bytes raise DbError
+pub fn Row::bool(Self, Int) -> Bool raise DbError
+pub fn Row::bool_by(Self, String) -> Bool raise DbError
+pub fn Row::by_name(Self, String) -> Value?
+pub fn Row::double(Self, Int) -> Double raise DbError
+pub fn Row::double_by(Self, String) -> Double raise DbError
+pub fn Row::get(Self, Int) -> Value raise DbError
+pub fn Row::index_of(Self, String) -> Int raise DbError
+pub fn Row::int(Self, Int) -> Int raise DbError
+pub fn Row::int64(Self, Int) -> Int64 raise DbError
+pub fn Row::int64_by(Self, String) -> Int64 raise DbError
+pub fn Row::int_by(Self, String) -> Int raise DbError
+pub fn Row::is_null(Self, Int) -> Bool raise DbError
+pub fn Row::is_null_by(Self, String) -> Bool raise DbError
+pub fn Row::text(Self, Int) -> String raise DbError
+pub fn Row::text_by(Self, String) -> String raise DbError
+pub fn Row::width(Self) -> Int
+
+pub(all) enum Value {
+  Null
+  Bool(Bool)
+  Int(Int)
+  Int64(Int64)
+  Double(Double)
+  Text(String)
+  Blob(Bytes)
+} derive(Eq)
+pub fn Value::is_null(Self) -> Bool
+pub fn Value::kind(Self) -> String
+pub impl Show for Value
+
+// Type aliases
+
+// Traits
+pub(open) trait Cursor {
+  fn next(Self) -> Row? raise DbError
+  fn close(Self) -> Unit
+}
+
+pub(open) trait Driver {
+  fn execute(Self, String, Array[Value]) -> ExecResult raise DbError
+  fn query(Self, String, Array[Value]) -> Array[Row] raise DbError
+  fn query_stream(Self, String, Array[Value]) -> &Cursor raise DbError = _
+  fn begin(Self) -> Unit raise DbError
+  fn commit(Self) -> Unit raise DbError
+  fn rollback(Self) -> Unit raise DbError
+  fn close(Self) -> Unit
+  fn ping(Self) -> Bool = _
+}

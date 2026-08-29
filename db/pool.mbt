@@ -111,6 +111,14 @@ pub fn[D] Pool::idle_count(self : Pool[D]) -> Int {
 }
 
 ///|
+/// How many connections are checked out right now. A shutdown that wants to wait for
+/// borrowed connections to come home polls this after `close_all`: the close empties
+/// the idle set, so what is left is exactly what is still in use.
+pub fn[D] Pool::in_use_count(self : Pool[D]) -> Int {
+  self.checked_out.length()
+}
+
+///|
 /// How many connections the pool has open in total: those checked out plus those
 /// sitting idle. Never exceeds `max_size`.
 pub fn[D] Pool::open_count(self : Pool[D]) -> Int {
@@ -282,6 +290,10 @@ pub fn[D : Driver, R] Pool::with_conn(
 /// Close every idle connection and mark the pool closed. Connections still
 /// checked out are not touched — each is closed as it is [`release`]d back. After
 /// this, `acquire` raises `Closed`. Idempotent.
+///
+/// This is the graceful half of a shutdown: nothing in flight is cut off. To wait
+/// for the rest, poll [`in_use_count`] until it reaches zero — this pool is
+/// synchronous, so the waiting belongs to whatever async layer owns it.
 pub fn[D : Driver] Pool::close_all(self : Pool[D]) -> Unit {
   for entry in self.idle {
     entry.0.close()

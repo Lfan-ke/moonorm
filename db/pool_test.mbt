@@ -314,3 +314,26 @@ test "pool: max_lifetime_ms must not be negative" {
   }
   assert_eq(bad, true)
 }
+
+///|
+/// What a shutdown watches: after `close_all` the idle set is empty, so what remains
+/// open is exactly what is still borrowed, and `in_use_count` counts down to zero as
+/// those come home.
+test "pool: in_use_count is what a drain waits on after close_all" {
+  let (pool, _) = counting_pool()
+  let a = pool.acquire()
+  let b = pool.acquire()
+  let c = pool.acquire()
+  pool.release(c)
+  assert_eq(pool.in_use_count(), 2)
+  assert_eq(pool.idle_count(), 1)
+  pool.close_all()
+  // The idle one is gone; the two still out are untouched.
+  assert_eq(pool.idle_count(), 0)
+  assert_eq(pool.in_use_count(), 2)
+  pool.release(a)
+  assert_eq(pool.in_use_count(), 1)
+  pool.release(b)
+  assert_eq(pool.in_use_count(), 0)
+  assert_eq(pool.open_count(), 0)
+}

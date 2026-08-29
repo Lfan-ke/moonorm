@@ -16,7 +16,7 @@ This repository is six independent moon modules, not one — there is no `moon.w
 - `moon fmt` before anything else, in every module you touched. CI runs `moon fmt && git diff --exit-code`, so an unformatted file fails the build on its own.
 - `moon check --target all --deny-warn` is the gate (`--target native` for the two native modules). Warnings are errors.
 - `moon test` likewise per module.
-- `moon info` regenerates `pkg.generated.mbti`. If that file does not change, your edit is not visible to anyone depending on the package, which usually means the refactor was safe. Only `drivers/postgres` tracks its interface today; `moon info` in the other modules leaves untracked files behind, so clean them up afterwards.
+- `moon info` regenerates `pkg.generated.mbti`. If that file does not change, your edit is not visible to anyone depending on the package, which usually means the refactor was safe. Every module tracks its own, so run it in each one you touched; the example packages regenerate theirs, which is why only those are gitignored.
 - CI installs the latest moon on every run, so a toolchain that is behind will disagree with it. Upgrade locally rather than pinning.
 
 # Tests against real databases

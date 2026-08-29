@@ -6,8 +6,3 @@ target/
 
 # example packages regenerate these; only the library interface is tracked
 examples/*/pkg.generated.mbti
-pkg.generated.mbti
-db/pkg.generated.mbti
-drivers/sqlite/pkg.generated.mbti
-drivers/mysql/pkg.generated.mbti
-drivers/mysql/client/pkg.generated.mbti
