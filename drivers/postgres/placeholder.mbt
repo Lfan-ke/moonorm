@@ -15,6 +15,14 @@
 /// literal `?` an application genuinely needs in output can be written `??`,
 /// which collapses to a single `?` (mirroring JDBC-style escaping).
 pub fn translate_placeholders(sql : String) -> String {
+  scan_placeholders(sql).0
+}
+
+///|
+/// The single scan both `translate_placeholders` and `count_placeholders` use:
+/// rewrite each `?` outside a quoted span or comment to `$n`, and report how many
+/// were rewritten.
+fn scan_placeholders(sql : String) -> (String, Int) {
   let sb = StringBuilder()
   let n = sql.length()
   let mut i = 0
@@ -22,12 +30,20 @@ pub fn translate_placeholders(sql : String) -> String {
   while i < n {
     let c = sql[i]
     if c == '\'' {
-      // single-quoted string literal: '' is an escaped quote
+      // Single-quoted string literal: `''` is an escaped quote, and so is a
+      // backslash escape in an E'' string or under standard_conforming_strings=off.
+      // Missing the backslash form ends the literal early, after which a `?` in the
+      // *data* is renumbered as a placeholder and the real one is left untranslated.
       sb.write_char('\'')
       i += 1
       while i < n {
         let d = sql[i]
         sb.write_char(d.unsafe_to_char())
+        if d == '\\' && i + 1 < n {
+          sb.write_char(sql[i + 1].unsafe_to_char())
+          i += 2
+          continue
+        }
         if d == '\'' {
           if i + 1 < n && sql[i + 1] == '\'' {
             sb.write_char('\'')
@@ -123,7 +139,7 @@ pub fn translate_placeholders(sql : String) -> String {
       i += 1
     }
   }
-  sb.to_string()
+  (sb.to_string(), param)
 }
 
 ///|
@@ -131,33 +147,10 @@ pub fn translate_placeholders(sql : String) -> String {
 /// count of parameters a statement expects. Shares the same scanner discipline
 /// so `??` escapes and quoted/comment spans do not count.
 pub fn count_placeholders(sql : String) -> Int {
-  let translated = translate_placeholders(sql)
-  // The translation is 1:1 on placeholder count; recount `$n` we emitted by
-  // re-running the scan is wasteful, so instead count during a light re-scan.
-  // Simpler and correct: highest `$n` emitted equals the parameter count.
-  let n = translated.length()
-  let mut i = 0
-  let mut max = 0
-  while i < n {
-    let c = translated[i]
-    if c == '$' &&
-      i + 1 < n &&
-      translated[i + 1] >= '0' &&
-      translated[i + 1] <= '9' {
-      i += 1
-      let mut v = 0
-      while i < n && translated[i] >= '0' && translated[i] <= '9' {
-        v = v * 10 + (translated[i].to_int() - 48)
-        i += 1
-      }
-      if v > max {
-        max = v
-      }
-    } else {
-      i += 1
-    }
-  }
-  max
+  // Counted during the scan, not by looking for `$n` in the output: an output `$9`
+  // may have been copied through from a string literal or a comment, which made
+  // this report a parameter count no statement ever had.
+  scan_placeholders(sql).1
 }
 
 ///|

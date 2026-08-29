@@ -64,7 +64,10 @@ fn ByteReader::i32(self : ByteReader) -> Int raise DbError {
 ///|
 /// Read exactly `n` raw bytes.
 fn ByteReader::take(self : ByteReader, n : Int) -> Bytes raise DbError {
-  guard n >= 0 && self.pos + n <= self.data.length() else {
+  // `n` is a length the server sent, so it can be anything. Comparing `pos + n`
+  // overflows for a large one and the guard passes, after which the slice runs
+  // backwards and aborts the process rather than raising — subtract instead.
+  guard n >= 0 && n <= self.data.length() - self.pos else {
     raise QueryError("protocol: read past end of message")
   }
   let out = self.data[self.pos:self.pos + n].to_owned()

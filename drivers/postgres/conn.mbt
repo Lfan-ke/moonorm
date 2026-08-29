@@ -216,14 +216,20 @@ async fn PgConn::read_results(self : PgConn) -> QueryOutcome raise DbError {
   for ;; {
     let (tag, payload) = self.read_message()
     match tag {
-      // 'T' RowDescription
+      // 'T' RowDescription. A malformed one has to drain like an error does: the
+      // rest of this result is still on the socket, and leaving it there means the
+      // next statement reads it.
       84 => {
+        errdefer self.drain_until_ready()
         let (names, oids) = parse_row_description(payload)
         col_names = names
         col_oids = oids
       }
       // 'D' DataRow
-      68 => rows.push(parse_data_row(payload, col_names, col_oids))
+      68 => {
+        errdefer self.drain_until_ready()
+        rows.push(parse_data_row(payload, col_names, col_oids))
+      }
       // 'C' CommandComplete
       67 => {
         let r = ByteReader::new(payload)
@@ -238,6 +244,14 @@ async fn PgConn::read_results(self : PgConn) -> QueryOutcome raise DbError {
       }
       // 'Z' ReadyForQuery
       90 => return QueryOutcome::{ rows, command_tag, }
+      // 'G' CopyInResponse: the server is now waiting for us to send copy data.
+      // Reading on would block forever with nothing to read, so say so instead of
+      // hanging. 'H' CopyOutResponse is the mirror: the rows are copy data this
+      // driver cannot deliver, so reporting zero rows would be a lie.
+      71 | 72 =>
+        raise @moondb.QueryError(
+          "protocol: COPY is not supported by this driver",
+        )
       // '1' ParseComplete / '2' BindComplete / 'n' NoData / 't' ParamDesc /
       // 'I' EmptyQueryResponse / 'S' ParameterStatus / 'N' NoticeResponse
       _ => ()
@@ -416,14 +430,26 @@ pub async fn PgRowStream::next(self : PgRowStream) -> Row? raise DbError {
   for ;; {
     let (tag, payload) = self.conn.read_message()
     match tag {
-      // 'T' RowDescription
+      // 'T' RowDescription. A malformed one leaves the rest of the result on the
+      // socket with the stream still marked live, which bricks the connection —
+      // drain and close the stream before raising, as the error path does.
       84 => {
+        errdefer {
+          self.conn.drain_until_ready()
+          self.finish()
+        }
         let (names, oids) = parse_row_description(payload)
         self.col_names = names
         self.col_oids = oids
       }
       // 'D' DataRow
-      68 => return Some(parse_data_row(payload, self.col_names, self.col_oids))
+      68 => {
+        errdefer {
+          self.conn.drain_until_ready()
+          self.finish()
+        }
+        return Some(parse_data_row(payload, self.col_names, self.col_oids))
+      }
       // 'E' ErrorResponse
       69 => {
         let msg = parse_error_response(payload)
