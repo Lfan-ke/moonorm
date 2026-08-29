@@ -1,4 +1,5 @@
 .*
 !.git*
+!.moonignore
 _build/
 target/
