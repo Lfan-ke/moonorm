@@ -111,7 +111,7 @@ pub fn md5(msg : Bytes) -> Bytes {
 /// hex string — the form PostgreSQL's MD5 auth concatenates and re-hashes.
 pub fn hex_lower(data : Bytes) -> String {
   let digits = "0123456789abcdef"
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for i in 0..<data.length() {
     let b = data[i].to_int()
     buf.write_char(digits[b >> 4].unsafe_to_char())

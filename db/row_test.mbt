@@ -53,12 +53,12 @@ test "by-name typed accessors mirror positional ones" {
 
 ///|
 test "integer and double accessors widen and narrow losslessly where defined" {
-  let r : Row = { columns: ["a"], values: [Int(5)] }
+  let r : Row = { columns: ["a"], values: [Int(5)], }
   // Int widens to Int64 and Double.
   assert_eq(r.int64(0), 5L)
   assert_eq(r.double(0), 5.0)
   // Int64 that fits narrows to Int.
-  let big : Row = { columns: ["a"], values: [Int64(1234)] }
+  let big : Row = { columns: ["a"], values: [Int64(1234)], }
   assert_eq(big.int(0), 1234)
   assert_eq(big.double(0), 1234.0)
 }
@@ -109,8 +109,8 @@ test "out-of-range index raises QueryError, missing name raises QueryError" {
 
 ///|
 test "exec result carries counts and equals structurally" {
-  let a : ExecResult = { rows_affected: 3, last_insert_id: 42 }
-  let b : ExecResult = { rows_affected: 3, last_insert_id: 42 }
+  let a : ExecResult = { rows_affected: 3, last_insert_id: 42, }
+  let b : ExecResult = { rows_affected: 3, last_insert_id: 42, }
   assert_eq(a == b, true)
   assert_eq(a.rows_affected, 3L)
   assert_eq(a.last_insert_id, 42L)

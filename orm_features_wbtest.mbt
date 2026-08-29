@@ -129,14 +129,14 @@ struct FixedDriver {
 
 ///|
 fn FixedDriver::new(affected : Int64) -> FixedDriver {
-  { affected, last_sql: "", last_params: [] }
+  { affected, last_sql: "", last_params: [], }
 }
 
 ///|
 pub impl @moondb.Driver for FixedDriver with fn execute(self, sql, params) {
   self.last_sql = sql
   self.last_params = params
-  { rows_affected: self.affected, last_insert_id: 0 }
+  { rows_affected: self.affected, last_insert_id: 0, }
 }
 
 ///|

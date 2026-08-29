@@ -47,7 +47,7 @@ pub fn PgDriver::new(
   password? : String = "",
   database~ : String,
 ) -> PgDriver {
-  { host, port, user, password, database }
+  { host, port, user, password, database, }
 }
 
 ///|

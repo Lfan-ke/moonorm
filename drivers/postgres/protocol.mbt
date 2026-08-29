@@ -16,7 +16,7 @@ priv struct MsgWriter {
 
 ///|
 fn MsgWriter::new() -> MsgWriter {
-  { buf: Buffer() }
+  { buf: Buffer(), }
 }
 
 ///|

@@ -106,7 +106,7 @@ pub fn parse_ok(payload : Bytes) -> OkPacket raise MysqlError {
   let last_id = r.lenenc_uint()
   let status = r.uint_le(2).to_int()
   let warnings = r.uint_le(2).to_int()
-  { affected_rows: affected, last_insert_id: last_id, status, warnings }
+  { affected_rows: affected, last_insert_id: last_id, status, warnings, }
 }
 
 ///|
@@ -135,7 +135,7 @@ pub fn parse_column_def(payload : Bytes) -> ColumnDef raise MysqlError {
   let column_type = r.u8()
   let flags = r.uint_le(2).to_int()
   let _decimals = r.u8()
-  { name, column_type, charset, flags }
+  { name, column_type, charset, flags, }
 }
 
 ///|
@@ -217,7 +217,7 @@ pub fn build_text_rows(
     for col in columns {
       values.push(decode_text_value(r.lenenc_bytes(), col))
     }
-    rows.push(@moondb.Row::{ columns: names, values })
+    rows.push(@moondb.Row::{ columns: names, values, })
   }
   rows
 }

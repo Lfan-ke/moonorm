@@ -368,14 +368,14 @@ pub fn Select::window(
 /// Add an inner `JOIN table ON <on>`. The `on` predicate is rendered verbatim
 /// (it references columns, not bound values), so pass only trusted identifiers.
 pub fn Select::join(self : Select, table : String, on : String) -> Select {
-  self.joins.push({ kind: "JOIN", table, on })
+  self.joins.push({ kind: "JOIN", table, on, })
   self
 }
 
 ///|
 /// Add a `LEFT JOIN table ON <on>`. See `join` for the `on` contract.
 pub fn Select::left_join(self : Select, table : String, on : String) -> Select {
-  self.joins.push({ kind: "LEFT JOIN", table, on })
+  self.joins.push({ kind: "LEFT JOIN", table, on, })
   self
 }
 
@@ -396,7 +396,7 @@ pub fn Select::having(
   op : String,
   val : Value,
 ) -> Select {
-  self.havings.push({ col, op, val })
+  self.havings.push({ col, op, val, })
   self
 }
 
@@ -408,7 +408,7 @@ pub fn Select::where_(
   op : String,
   val : Value,
 ) -> Select {
-  self.conds.push({ col, op, val })
+  self.conds.push({ col, op, val, })
   self
 }
 
@@ -436,7 +436,7 @@ pub fn Select::where_pred(self : Select, pred : Predicate) -> Select {
 /// the `WITH` clause leads the SQL text. `name` is a trusted identifier declared in
 /// code, never a bound value.
 pub fn Select::with_cte(self : Select, name : String, sub : Select) -> Select {
-  self.ctes.push({ name, sub, recursive: false })
+  self.ctes.push({ name, sub, recursive: false, })
   self
 }
 
@@ -456,7 +456,7 @@ pub fn Select::with_recursive(
   all? : Bool = false,
 ) -> Select {
   let sub = if all { anchor.union_all(step) } else { anchor.union(step) }
-  self.ctes.push({ name, sub, recursive: true })
+  self.ctes.push({ name, sub, recursive: true, })
   self
 }
 
@@ -465,7 +465,7 @@ pub fn Select::with_recursive(
 /// values splice in at the predicate's position, so a correlated or filtering
 /// subquery stays injection-safe exactly like a scalar `where_`.
 pub fn Select::where_in(self : Select, col : String, sub : Select) -> Select {
-  self.sub_conds.push({ col, op: "IN", sub })
+  self.sub_conds.push({ col, op: "IN", sub, })
   self
 }
 
@@ -476,7 +476,7 @@ pub fn Select::where_not_in(
   col : String,
   sub : Select,
 ) -> Select {
-  self.sub_conds.push({ col, op: "NOT IN", sub })
+  self.sub_conds.push({ col, op: "NOT IN", sub, })
   self
 }
 
@@ -506,7 +506,7 @@ pub fn Select::where_in_values(
   col : String,
   vals : Array[Value],
 ) -> Select {
-  self.in_conds.push({ col, negated: false, vals })
+  self.in_conds.push({ col, negated: false, vals, })
   self
 }
 
@@ -519,7 +519,7 @@ pub fn Select::where_not_in_values(
   col : String,
   vals : Array[Value],
 ) -> Select {
-  self.in_conds.push({ col, negated: true, vals })
+  self.in_conds.push({ col, negated: true, vals, })
   self
 }
 
@@ -756,7 +756,7 @@ pub struct Insert {
 
 ///|
 pub fn insert(table : String) -> Insert {
-  { table, cols: [], vals: [], extra_rows: [], conflict: None, returning: [] }
+  { table, cols: [], vals: [], extra_rows: [], conflict: None, returning: [], }
 }
 
 ///|
@@ -784,7 +784,7 @@ fn Insert::ensure_conflict(self : Insert) -> Conflict {
   match self.conflict {
     Some(c) => c
     None => {
-      let c = { targets: [], assigns: [], do_nothing: false }
+      let c = { targets: [], assigns: [], do_nothing: false, }
       self.conflict = Some(c)
       c
     }
@@ -811,7 +811,7 @@ pub fn Insert::on_conflict(self : Insert, targets : Array[String]) -> Insert {
 /// parameter after the inserted values, so an upsert stays injection-safe.
 pub fn Insert::do_update(self : Insert, col : String, val : Value) -> Insert {
   let c = self.ensure_conflict()
-  c.assigns.push({ col, value: Bound(val) })
+  c.assigns.push({ col, value: Bound(val), })
   self
 }
 
@@ -821,7 +821,7 @@ pub fn Insert::do_update(self : Insert, col : String, val : Value) -> Insert {
 /// "overwrite with the incoming row" upsert.
 pub fn Insert::do_update_excluded(self : Insert, col : String) -> Insert {
   let c = self.ensure_conflict()
-  c.assigns.push({ col, value: Excluded })
+  c.assigns.push({ col, value: Excluded, })
   self
 }
 
@@ -975,7 +975,7 @@ pub struct Update {
 
 ///|
 pub fn update(table : String) -> Update {
-  { table, cols: [], vals: [], conds: [] }
+  { table, cols: [], vals: [], conds: [], }
 }
 
 ///|
@@ -992,7 +992,7 @@ pub fn Update::where_(
   op : String,
   val : Value,
 ) -> Update {
-  self.conds.push({ col, op, val })
+  self.conds.push({ col, op, val, })
   self
 }
 
@@ -1035,7 +1035,7 @@ pub struct Delete {
 
 ///|
 pub fn delete(table : String) -> Delete {
-  { table, conds: [] }
+  { table, conds: [], }
 }
 
 ///|
@@ -1045,7 +1045,7 @@ pub fn Delete::where_(
   op : String,
   val : Value,
 ) -> Delete {
-  self.conds.push({ col, op, val })
+  self.conds.push({ col, op, val, })
   self
 }
 

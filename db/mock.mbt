@@ -24,7 +24,7 @@ pub struct MockDriver {
 ///|
 /// A fresh, empty mock connection.
 pub fn MockDriver::new() -> MockDriver {
-  { rows: [], next_id: 0, savepoints: [], closed: false }
+  { rows: [], next_id: 0, savepoints: [], closed: false, }
 }
 
 ///|
@@ -59,9 +59,9 @@ pub impl Driver for MockDriver with fn execute(
   for i in 0..<params.length() {
     columns.push("c" + i.to_string())
   }
-  self.rows.push({ columns, values: params })
+  self.rows.push({ columns, values: params, })
   self.next_id = self.next_id + 1
-  { rows_affected: 1, last_insert_id: self.next_id }
+  { rows_affected: 1, last_insert_id: self.next_id, }
 }
 
 ///|

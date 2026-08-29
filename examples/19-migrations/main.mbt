@@ -56,7 +56,7 @@ impl @moondb.Driver for SchemaLog with fn execute(
       }
     }
   }
-  { rows_affected: 1L, last_insert_id: 0L }
+  { rows_affected: 1L, last_insert_id: 0L, }
 }
 
 ///|
@@ -70,7 +70,7 @@ impl @moondb.Driver for SchemaLog with fn query(
   }
   let out : Array[@moondb.Row] = []
   let row = fn(version : Int) -> @moondb.Row {
-    { columns: ["version"], values: [@moondb.Int(version)] }
+    { columns: ["version"], values: [@moondb.Int(version)], }
   }
   if sql.has_prefix("SELECT version FROM schema_migrations WHERE version") {
     let target = version_of(params[0])
@@ -129,7 +129,7 @@ fn main {
   }
   let migrations = [v2, v1]
   try {
-    let sess = @moonorm.Session::new(SchemaLog::{ applied: [], closed: false })
+    let sess = @moonorm.Session::new(SchemaLog::{ applied: [], closed: false, })
     let mig = @moonorm.Migrator::new()
     println("current version: \{mig.current_version(sess)}")
     let n = mig.up(sess, migrations)

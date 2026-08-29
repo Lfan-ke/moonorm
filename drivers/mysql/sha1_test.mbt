@@ -6,7 +6,7 @@
 /// packet tests can assert against the published hex vectors directly.
 fn hex(b : Bytes) -> String {
   let digits = "0123456789abcdef"
-  let sb = StringBuilder::new()
+  let sb = StringBuilder()
   for i in 0..<b.length() {
     let v = b[i].to_int()
     sb.write_char(digits[v >> 4].unsafe_to_char())

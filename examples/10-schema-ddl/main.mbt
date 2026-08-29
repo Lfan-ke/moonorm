@@ -44,7 +44,7 @@ let heroes : @moonorm.Model[Hero] = @moonorm.Model::new(
       default=Some("CURRENT_TIMESTAMP"),
     ),
   ],
-  r => { id: r.int(0), name: r.text(1), team_id: r.int(3) },
+  r => { id: r.int(0), name: r.text(1), team_id: r.int(3), },
   h => {
     [
       ("id", @moondb.Int(h.id)),
@@ -63,7 +63,7 @@ let memberships : @moonorm.Model[Hero] = @moonorm.Model::new(
     @moonorm.column("hero_id", @moonorm.IntType, primary_key=true),
     @moonorm.column("team_id", @moonorm.IntType, primary_key=true),
   ],
-  r => { id: r.int(0), name: "", team_id: r.int(1) },
+  r => { id: r.int(0), name: "", team_id: r.int(1), },
   _ => [],
 )
 

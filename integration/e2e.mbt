@@ -31,7 +31,7 @@ fn team_model() -> @orm.Model[Team] {
       @orm.column("id", @orm.IntType, primary_key=true),
       @orm.column("name", @orm.TextType, nullable=false),
     ],
-    r => { id: r.int(0), name: r.text(1) },
+    r => { id: r.int(0), name: r.text(1), },
     t => [("id", @moondb.Int(t.id)), ("name", @moondb.Text(t.name))],
   )
 }
@@ -48,7 +48,12 @@ fn hero_model() -> @orm.Model[Hero] {
       @orm.column("team_id", @orm.IntType, references=Some(("team", "id"))),
       @orm.column("version", @orm.IntType, nullable=false),
     ],
-    r => { id: r.int(0), name: r.text(1), team_id: r.int(2), version: r.int(3) },
+    r => {
+      id: r.int(0),
+      name: r.text(1),
+      team_id: r.int(2),
+      version: r.int(3),
+    },
     h => {
       [
         ("id", @moondb.Int(h.id)),
@@ -111,11 +116,11 @@ test "e2e: migrations, Session CRUD, CTE select, optimistic lock on real SQLite"
   // --- Session CRUD through the models ------------------------------------
   let teams = team_model()
   let heroes = hero_model()
-  sess.insert_record(teams, { id: 1, name: "avengers" }) |> ignore
-  sess.insert_record(teams, { id: 2, name: "x-men" }) |> ignore
-  sess.insert_record(heroes, { id: 1, name: "ironman", team_id: 1, version: 1 })
+  sess.insert_record(teams, { id: 1, name: "avengers", }) |> ignore
+  sess.insert_record(teams, { id: 2, name: "x-men", }) |> ignore
+  sess.insert_record(heroes, { id: 1, name: "ironman", team_id: 1, version: 1, })
   |> ignore
-  sess.insert_record(heroes, { id: 2, name: "hulk", team_id: 1, version: 1 })
+  sess.insert_record(heroes, { id: 2, name: "hulk", team_id: 1, version: 1, })
   |> ignore
   sess.insert_record(heroes, {
     id: 3,

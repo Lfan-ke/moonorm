@@ -251,7 +251,7 @@ pub fn[T] Model::new(
   from_row : (@moondb.Row) -> T raise @moondb.DbError,
   to_columns : (T) -> Array[(String, Value)],
 ) -> Model[T] {
-  { table, columns, from_row, to_columns }
+  { table, columns, from_row, to_columns, }
 }
 
 ///|
@@ -293,7 +293,7 @@ pub fn[T] Model::from_fields(
     }
     out
   }
-  { table, columns, from_row, to_columns }
+  { table, columns, from_row, to_columns, }
 }
 
 ///|
@@ -323,7 +323,7 @@ pub fn[T] Model::select(self : Model[T]) -> Select {
 /// The `Table` descriptor for this model (name + column names), for interop with
 /// the plain builder API.
 pub fn[T] Model::table_descriptor(self : Model[T]) -> Table {
-  { name: self.table, columns: self.column_names() }
+  { name: self.table, columns: self.column_names(), }
 }
 
 ///|
@@ -414,7 +414,7 @@ pub fn[S, T] has_many(
   foreign_key : String,
   parent_key : (S) -> Value,
 ) -> Relation[S, T] {
-  { target, key_column: foreign_key, source_key: parent_key, to_many: true }
+  { target, key_column: foreign_key, source_key: parent_key, to_many: true, }
 }
 
 ///|
@@ -426,7 +426,7 @@ pub fn[S, T] belongs_to(
   target_key : String,
   child_key : (S) -> Value,
 ) -> Relation[S, T] {
-  { target, key_column: target_key, source_key: child_key, to_many: false }
+  { target, key_column: target_key, source_key: child_key, to_many: false, }
 }
 
 ///|
@@ -505,7 +505,7 @@ pub fn[S, T] many_to_many(
   target_key~ : String,
   source_key~ : (S) -> Value,
 ) -> ManyToMany[S, T] {
-  { target, junction, source_fk, target_fk, target_key, source_key }
+  { target, junction, source_fk, target_fk, target_key, source_key, }
 }
 
 ///|

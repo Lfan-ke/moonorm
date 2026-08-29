@@ -24,7 +24,7 @@ priv struct ByteReader {
 
 ///|
 fn ByteReader::new(data : Bytes) -> ByteReader {
-  { data, pos: 0 }
+  { data, pos: 0, }
 }
 
 ///|
@@ -93,7 +93,7 @@ fn ByteReader::cstring(self : ByteReader) -> String raise DbError {
 /// sequences by code point; malformed input yields U+FFFD rather than raising,
 /// matching a lenient text codec.
 pub fn utf8_decode(data : Bytes) -> String {
-  let sb = StringBuilder::new()
+  let sb = StringBuilder()
   let n = data.length()
   let mut i = 0
   while i < n {

@@ -23,7 +23,7 @@ pub fn SqliteDriver::open(path : String) -> SqliteDriver raise @moondb.DbError {
   if h == 0L {
     raise @moondb.ConnectError("cannot open database: " + path)
   }
-  { handle: h, closed: false }
+  { handle: h, closed: false, }
 }
 
 ///|
@@ -141,7 +141,7 @@ pub impl @moondb.Driver for SqliteDriver with fn query(self, sql, params) {
       }
       vals.push(v)
     }
-    rows.push({ columns: cols, values: vals })
+    rows.push({ columns: cols, values: vals, })
   }
   ffi_finalize(st) |> ignore
   // A mid-scan error (SQLITE_ERROR/BUSY/…) must surface, not silently truncate the
@@ -190,7 +190,7 @@ pub impl @moondb.Cursor for SqliteCursor with fn next(self : SqliteCursor) -> @m
     }
     vals.push(v)
   }
-  Some({ columns: self.cols, values: vals })
+  Some({ columns: self.cols, values: vals, })
 }
 
 ///|
@@ -211,7 +211,7 @@ pub impl @moondb.Driver for SqliteDriver with fn query_stream(self, sql, params)
   for i = 0; i < ncol; i = i + 1 {
     cols.push(bytes_to_str(ffi_col_name(st, i)))
   }
-  SqliteCursor::{ driver: self, st, cols, ncol, done: false }
+  SqliteCursor::{ driver: self, st, cols, ncol, done: false, }
 }
 
 ///|

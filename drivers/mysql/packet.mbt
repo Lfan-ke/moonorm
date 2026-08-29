@@ -16,7 +16,7 @@ pub struct PacketReader {
 ///|
 /// Wrap a decoded packet payload for reading from the start.
 pub fn PacketReader::new(data : Bytes) -> PacketReader {
-  { data, pos: 0 }
+  { data, pos: 0, }
 }
 
 ///|

@@ -37,7 +37,7 @@ impl @moondb.Driver for Stale with fn execute(
   _sql : String,
   _params : Array[@moondb.Value],
 ) -> @moondb.ExecResult raise @moondb.DbError {
-  { rows_affected: self.affected, last_insert_id: 0L }
+  { rows_affected: self.affected, last_insert_id: 0L, }
 }
 
 ///|
@@ -97,7 +97,7 @@ fn main {
   }
 
   // Lost update: no row matched the expected version -> LostUpdate, not a silent no-op.
-  let sess2 = @moonorm.Session::new(Stale::{ affected: 0L })
+  let sess2 = @moonorm.Session::new(Stale::{ affected: 0L, })
   try {
     sess2.modify_versioned(stmt(), what="hero") |> ignore
     println("-- unexpected: stale write succeeded")

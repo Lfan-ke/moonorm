@@ -1,7 +1,7 @@
 ///|
 fn hex(b : Bytes) -> String {
   let d = "0123456789abcdef".to_array()
-  let sb = StringBuilder::new()
+  let sb = StringBuilder()
   for i = 0; i < b.length(); i = i + 1 {
     let v = b[i].to_int()
     sb.write_char(d[(v >> 4) & 0xf])

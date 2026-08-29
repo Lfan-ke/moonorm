@@ -136,14 +136,14 @@ fn DerReader::take(self : DerReader, n : Int) -> Bytes raise MysqlError {
 pub fn parse_rsa_public_key(pem : String) -> (BigInt, BigInt) raise MysqlError {
   // Keep only the base64 body; the `-----BEGIN/END-----` lines contain letters
   // that are themselves valid base64 and would otherwise decode as key bytes.
-  let body = StringBuilder::new()
+  let body = StringBuilder()
   for line in pem.split("\n") {
     if !line.has_prefix("-") {
       body.write_string(line.to_owned())
     }
   }
   let der = base64_decode(body.to_string())
-  let r = DerReader::{ data: der, pos: 0 }
+  let r = DerReader::{ data: der, pos: 0, }
   r.expect(0x30) |> ignore // outer SEQUENCE
   let alg_len = r.expect(0x30) // AlgorithmIdentifier SEQUENCE
   r.take(alg_len) |> ignore // skip the algorithm id

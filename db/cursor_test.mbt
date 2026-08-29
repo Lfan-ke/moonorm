@@ -23,8 +23,8 @@ test "query_stream default cursor yields exactly what query returns" {
 ///|
 test "ArrayCursor advances in order then reports exhaustion" {
   let cur = ArrayCursor::new([
-    { columns: ["c0"], values: [Int(10)] },
-    { columns: ["c0"], values: [Int(20)] },
+    { columns: ["c0"], values: [Int(10)], },
+    { columns: ["c0"], values: [Int(20)], },
   ])
   let first = cur.next()
   assert_eq(first is Some(_), true)

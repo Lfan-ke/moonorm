@@ -24,7 +24,7 @@ let categories : @moonorm.Model[Category] = @moonorm.Model::new(
       references=Some(("categories", "id")),
     ),
   ],
-  r => { id: r.int(0), name: r.text(1), parent: r.int(2) },
+  r => { id: r.int(0), name: r.text(1), parent: r.int(2), },
   c => {
     [
       ("id", @moondb.Int(c.id)),
@@ -93,10 +93,10 @@ fn main {
   println(rsql)
   println("params: " + params_str(rparams))
   let tree : Array[Category] = [
-    { id: 1, name: "lfanke", parent: 0 },
-    { id: 233, name: "heke1228", parent: 1 },
-    { id: 23333, name: "qwq", parent: 233 },
-    { id: 66666, name: "emm", parent: 233 },
+    { id: 1, name: "lfanke", parent: 0, },
+    { id: 233, name: "heke1228", parent: 1, },
+    { id: 23333, name: "qwq", parent: 233, },
+    { id: 66666, name: "emm", parent: 233, },
   ]
   println("")
   println("-- through a Session over @moondb.MockDriver")

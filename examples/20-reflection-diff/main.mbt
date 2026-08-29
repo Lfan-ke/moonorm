@@ -49,7 +49,7 @@ impl @moondb.Driver for Pragma with fn execute(
   _sql : String,
   _params : Array[@moondb.Value],
 ) -> @moondb.ExecResult raise @moondb.DbError {
-  { rows_affected: 0L, last_insert_id: 0L }
+  { rows_affected: 0L, last_insert_id: 0L, }
 }
 
 ///|

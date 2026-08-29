@@ -99,10 +99,10 @@ test "row: every by-name typed accessor reads its declared type" {
 
 ///|
 test "row: by-name integer/double accessors widen and narrow like positional" {
-  let r : Row = { columns: ["a"], values: [Int(5)] }
+  let r : Row = { columns: ["a"], values: [Int(5)], }
   assert_eq(r.int64_by("a"), 5L) // Int widens to Int64
   assert_eq(r.double_by("a"), 5.0) // Int widens to Double
-  let big : Row = { columns: ["a"], values: [Int64(7)] }
+  let big : Row = { columns: ["a"], values: [Int64(7)], }
   assert_eq(big.int_by("a"), 7) // Int64 narrows to Int
   assert_eq(big.double_by("a"), 7.0) // Int64 widens to Double
 }

@@ -44,7 +44,7 @@ pub struct ArrayCursor {
 ///|
 /// A cursor positioned before the first of `rows`.
 pub fn ArrayCursor::new(rows : Array[Row]) -> ArrayCursor {
-  { rows, pos: 0 }
+  { rows, pos: 0, }
 }
 
 ///|

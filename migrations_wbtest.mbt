@@ -20,7 +20,7 @@ struct TrackerDriver {
 
 ///|
 fn TrackerDriver::new() -> TrackerDriver {
-  { versions: [], ran: [] }
+  { versions: [], ran: [], }
 }
 
 ///|
@@ -51,7 +51,7 @@ pub impl @moondb.Driver for TrackerDriver with fn execute(self, sql, params) {
     // A migration body statement (up or down): record that it ran.
     self.ran.push(sql)
   }
-  { rows_affected: 1, last_insert_id: 0 }
+  { rows_affected: 1, last_insert_id: 0, }
 }
 
 ///|
@@ -59,7 +59,7 @@ pub impl @moondb.Driver for TrackerDriver with fn query(self, sql, params) {
   if sql.contains("WHERE version = ?") {
     let v = params[0]._as_int()
     if self.versions.contains(v) {
-      [{ columns: ["version"], values: [Int(v)] }]
+      [{ columns: ["version"], values: [Int(v)], }]
     } else {
       []
     }
@@ -72,7 +72,7 @@ pub impl @moondb.Driver for TrackerDriver with fn query(self, sql, params) {
     sorted.sort()
     let rows : Array[@moondb.Row] = []
     for v in sorted {
-      rows.push({ columns: ["version"], values: [Int(v)] })
+      rows.push({ columns: ["version"], values: [Int(v)], })
     }
     rows
   }

@@ -34,7 +34,7 @@ let team_model : @moonorm.Model[Team] = @moonorm.Model::new(
     @moonorm.column("id", @moonorm.IntType, primary_key=true),
     @moonorm.column("name", @moonorm.TextType, nullable=false),
   ],
-  r => { id: r.int(0), name: r.text(1) },
+  r => { id: r.int(0), name: r.text(1), },
   t => [("id", @moondb.Int(t.id)), ("name", @moondb.Text(t.name))],
 )
 
@@ -50,7 +50,7 @@ let hero_model : @moonorm.Model[Hero] = @moonorm.Model::new(
       references=Some(("teams", "id")),
     ),
   ],
-  r => { id: r.int(0), name: r.text(1), team_id: r.int(2) },
+  r => { id: r.int(0), name: r.text(1), team_id: r.int(2), },
   h => {
     [
       ("id", @moondb.Int(h.id)),
@@ -67,7 +67,7 @@ let tag_model : @moonorm.Model[Tag] = @moonorm.Model::new(
     @moonorm.column("id", @moonorm.IntType, primary_key=true),
     @moonorm.column("label", @moonorm.TextType, nullable=false),
   ],
-  r => { id: r.int(0), label: r.text(1) },
+  r => { id: r.int(0), label: r.text(1), },
   t => [("id", @moondb.Int(t.id)), ("label", @moondb.Text(t.label))],
 )
 
@@ -103,7 +103,7 @@ impl @moondb.Driver for Rows with fn execute(
   _sql : String,
   _params : Array[@moondb.Value],
 ) -> @moondb.ExecResult raise @moondb.DbError {
-  { rows_affected: 0L, last_insert_id: 0L }
+  { rows_affected: 0L, last_insert_id: 0L, }
 }
 
 ///|
@@ -145,19 +145,19 @@ fn hero_row(id : Int, name : String, team_id : Int) -> @moondb.Row {
 
 ///|
 fn team_row(id : Int, name : String) -> @moondb.Row {
-  { columns: ["id", "name"], values: [@moondb.Int(id), @moondb.Text(name)] }
+  { columns: ["id", "name"], values: [@moondb.Int(id), @moondb.Text(name)], }
 }
 
 ///|
 fn tag_row(id : Int, label : String) -> @moondb.Row {
-  { columns: ["id", "label"], values: [@moondb.Int(id), @moondb.Text(label)] }
+  { columns: ["id", "label"], values: [@moondb.Int(id), @moondb.Text(label)], }
 }
 
 ///|
 #coverage.skip
 fn main {
-  let team1 : Team = { id: 1, name: "lfanke" }
-  let hero1 : Hero = { id: 233, name: "qwq", team_id: 1 }
+  let team1 : Team = { id: 1, name: "lfanke", }
+  let hero1 : Hero = { id: 233, name: "qwq", team_id: 1, }
 
   // 1:N — a team to its heroes, matched by heroes.team_id.
   let children = @moonorm.has_many(hero_model, "team_id", (t : Team) => {
@@ -180,7 +180,7 @@ fn main {
   println("params: " + params_str(pparams))
 
   // The single batch query behind selectinload: WHERE team_id IN (…distinct keys…).
-  let teams = [team1, { id: 2, name: "heke1228" }]
+  let teams = [team1, { id: 2, name: "heke1228", }]
   let (bsql, bparams) = children.batch_query(teams).build()
   println("")
   println("-- batch_query (one round trip for many sources)")
@@ -231,14 +231,14 @@ fn main {
     }
 
     // load_one: a hero's single team.
-    let s3 = @moonorm.Session::new(Rows::{ rows: [team_row(1, "lfanke")] })
+    let s3 = @moonorm.Session::new(Rows::{ rows: [team_row(1, "lfanke")], })
     match s3.load_one(hero1, parent) {
       Some(t) => println("-- load_one (hero1's team): \{t.name}")
       None => println("-- load_one: none")
     }
 
     // load_one_batch: each hero's team, one query, matched in memory.
-    let heroes = [hero1, { id: 234, name: "emm", team_id: 2 }]
+    let heroes = [hero1, { id: 234, name: "emm", team_id: 2, }]
     let s4 = @moonorm.Session::new(Rows::{
       rows: [team_row(1, "lfanke"), team_row(2, "heke1228")],
     })

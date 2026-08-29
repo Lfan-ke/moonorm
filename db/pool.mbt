@@ -274,14 +274,8 @@ pub fn[D : Driver, R] Pool::with_conn(
   f : (D) -> R raise DbError,
 ) -> R raise DbError {
   let conn = self.acquire()
-  let r = f(conn) catch {
-    e => {
-      self.release(conn)
-      raise e
-    }
-  }
-  self.release(conn)
-  r
+  defer self.release(conn)
+  f(conn)
 }
 
 ///|

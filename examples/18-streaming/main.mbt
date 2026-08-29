@@ -21,7 +21,7 @@ let heroes : @moonorm.Model[Hero] = @moonorm.Model::new(
     @moonorm.column("name", @moonorm.TextType, nullable=false),
     @moonorm.column("power", @moonorm.IntType),
   ],
-  r => { id: r.int(0), name: r.text(1), power: r.int(2) },
+  r => { id: r.int(0), name: r.text(1), power: r.int(2), },
   h => {
     [
       ("id", @moondb.Int(h.id)),
@@ -37,9 +37,9 @@ fn main {
   try {
     let sess = @moonorm.Session::new(@moondb.MockDriver::new())
     let roster : Array[Hero] = [
-      { id: 1, name: "lfanke", power: 233 },
-      { id: 233, name: "qwq", power: 23333 },
-      { id: 66666, name: "emm", power: 66666 },
+      { id: 1, name: "lfanke", power: 233, },
+      { id: 233, name: "qwq", power: 23333, },
+      { id: 66666, name: "emm", power: 66666, },
     ]
     for h in roster {
       sess.insert_record(heroes, h) |> ignore

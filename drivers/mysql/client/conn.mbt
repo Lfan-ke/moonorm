@@ -93,12 +93,8 @@ pub async fn MysqlConn::connect(
   let pw = @utf8.encode(password[:])
   // Close the socket on any handshake failure — a bad-credentials ERR is the
   // common case, and MoonBit has no fd finalizer to reclaim a leaked socket.
-  conn.do_handshake(user, pw, database) catch {
-    e => {
-      conn.tcp.close()
-      raise e
-    }
-  }
+  errdefer conn.tcp.close()
+  conn.do_handshake(user, pw, database)
   conn
 }
 
@@ -364,7 +360,7 @@ pub async fn MysqlConn::query_stream(
   }
   // OK ⇒ no result set: an already-exhausted stream.
   if @moon_mysql.is_ok_packet(first) {
-    return { conn: self, columns: [], pending: None, done: true }
+    return { conn: self, columns: [], pending: None, done: true, }
   }
   if first.length() > 0 && first[0].to_int() == 0xFB {
     raise @moon_mysql.UnsupportedError("LOCAL INFILE is not supported")
@@ -387,7 +383,7 @@ pub async fn MysqlConn::query_stream(
     Some(after_columns)
   }
   self.streaming = true
-  { conn: self, columns, pending, done: false }
+  { conn: self, columns, pending, done: false, }
 }
 
 ///|

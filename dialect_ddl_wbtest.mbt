@@ -13,7 +13,7 @@ test "multi-dialect CREATE TABLE renders per-engine types and autoincrement" {
       column("name", VarcharType(100)),
       column("doc", JsonType),
     ],
-    r => { id: r.int(0) },
+    r => { id: r.int(0), },
     x => [("id", @moondb.Int(x.id))],
   )
   assert_eq(

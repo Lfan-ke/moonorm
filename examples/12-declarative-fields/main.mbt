@@ -31,7 +31,7 @@ let heroes : @moonorm.Model[Hero] = @moonorm.Model::from_fields(
     ),
     @moonorm.field("power", @moonorm.IntType, h => @moondb.Int(h.power)),
   ],
-  r => { id: r.int(0), name: r.text(1), power: r.int(2) },
+  r => { id: r.int(0), name: r.text(1), power: r.int(2), },
 )
 
 ///|
@@ -61,7 +61,7 @@ fn main {
 
   // to_columns is derived from the field encoders — insert_of binds every field.
   let (isql, iparams) = heroes
-    .insert_of({ id: 1, name: "lfanke", power: 233 })
+    .insert_of({ id: 1, name: "lfanke", power: 233, })
     .build()
   println("")
   println("-- insert_of (binding derived from field encoders)")
@@ -82,8 +82,8 @@ fn main {
   try {
     let sess = @moonorm.Session::new(@moondb.MockDriver::new())
     let roster : Array[Hero] = [
-      { id: 1, name: "qwq", power: 66666 },
-      { id: 233, name: "emm", power: 23333 },
+      { id: 1, name: "qwq", power: 66666, },
+      { id: 233, name: "emm", power: 23333, },
     ]
     for h in roster {
       sess.insert_record(heroes, h) |> ignore

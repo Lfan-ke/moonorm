@@ -24,7 +24,7 @@ pub struct Session {
 ///|
 /// Wrap a connected driver in a session.
 pub fn Session::new(driver : &@moondb.Driver) -> Session {
-  { driver, sp_depth: 0, sp_seq: 0 }
+  { driver, sp_depth: 0, sp_seq: 0, }
 }
 
 ///|
@@ -135,7 +135,7 @@ pub fn[T] Session::stream_as(
   stmt : Select,
 ) -> RowStream[T] raise @moondb.DbError {
   let (sql, params) = stmt.build()
-  { cursor: self.driver.query_stream(sql, params), model }
+  { cursor: self.driver.query_stream(sql, params), model, }
 }
 
 ///|
@@ -325,7 +325,7 @@ pub fn Session::begin_nested(self : Session) -> Savepoint raise @moondb.DbError 
   let name = "moonorm_sp_" + self.sp_seq.to_string()
   self.driver.execute("SAVEPOINT " + name, []) |> ignore
   self.sp_depth = self.sp_depth + 1
-  { sess: self, name, depth: self.sp_depth, finished: false }
+  { sess: self, name, depth: self.sp_depth, finished: false, }
 }
 
 ///|
@@ -400,7 +400,7 @@ pub(all) struct TxOptions {
 /// read-write). Set what you need: `{ ..TxOptions::default(), isolation:
 /// Some(Serializable) }`.
 pub fn TxOptions::default() -> TxOptions {
-  { isolation: None, read_only: false }
+  { isolation: None, read_only: false, }
 }
 
 ///|

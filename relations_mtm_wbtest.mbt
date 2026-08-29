@@ -15,7 +15,7 @@ fn mtag_model() -> Model[MTag] {
   Model::new(
     "tag",
     [column("id", IntType, primary_key=true), column("name", TextType)],
-    r => { id: r.int(0), name: r.text(1) },
+    r => { id: r.int(0), name: r.text(1), },
     t => [("id", @moondb.Int(t.id)), ("name", @moondb.Text(t.name))],
   )
 }
@@ -30,7 +30,7 @@ test "many_to_many builds a JOIN through the junction with a qualified projectio
     target_key="id",
     source_key=fn(p : MPost) { Int(p.id) },
   )
-  let post : MPost = { id: 7 }
+  let post : MPost = { id: 7, }
   let (sql, params) = rel.query(post).build()
   // Target columns qualified (tag.*) so a same-named junction column is never
   // ambiguous; the join threads through the junction; the source key is bound.

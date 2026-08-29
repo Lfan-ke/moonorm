@@ -29,7 +29,7 @@ fn team_model() -> Model[Team] {
       column("id", IntType, primary_key=true),
       column("name", TextType, nullable=false),
     ],
-    r => { id: r.int(0), name: r.text(1) },
+    r => { id: r.int(0), name: r.text(1), },
     t => [("id", Int(t.id)), ("name", Text(t.name))],
   )
 }
@@ -43,7 +43,7 @@ fn hero_model() -> Model[Hero] {
       column("name", TextType, nullable=false),
       column("team_id", IntType, references=Some(("teams", "id"))),
     ],
-    r => { id: r.int(0), name: r.text(1), team_id: r.int(2) },
+    r => { id: r.int(0), name: r.text(1), team_id: r.int(2), },
     h => {
       [("id", Int(h.id)), ("name", Text(h.name)), ("team_id", Int(h.team_id))]
     },
@@ -134,8 +134,8 @@ test "model: create_table DDL + insert_record + all round-trip mapped records" {
   // create_table issues DDL (echoed as an empty-param row by the mock).
   sess.create_table(teams, if_not_exists=true) |> ignore
   let ddl_row_count = 1
-  sess.insert_record(teams, { id: 1, name: "avengers" }) |> ignore
-  sess.insert_record(teams, { id: 2, name: "x-men" }) |> ignore
+  sess.insert_record(teams, { id: 1, name: "avengers", }) |> ignore
+  sess.insert_record(teams, { id: 2, name: "x-men", }) |> ignore
   // `all` maps every echoed row back through from_row. The first row is the DDL's
   // empty echo, so filter to the two real records by decoding and checking ids.
   let rows = sess.query("SELECT * FROM teams", [])
@@ -143,8 +143,8 @@ test "model: create_table DDL + insert_record + all round-trip mapped records" {
   // The two insert echoes carry (id, name); map just those.
   let a = teams.map_row(rows[1])
   let b = teams.map_row(rows[2])
-  assert_eq(a, { id: 1, name: "avengers" })
-  assert_eq(b, { id: 2, name: "x-men" })
+  assert_eq(a, { id: 1, name: "avengers", })
+  assert_eq(b, { id: 2, name: "x-men", })
   sess.close()
 }
 
@@ -165,7 +165,7 @@ test "relation: has_many / belongs_to build the bound filter query" {
   let children : Relation[Team, Hero] = has_many(heroes, "team_id", t => {
     Int(t.id)
   })
-  let (sql1, p1) = children.query({ id: 1, name: "avengers" }).build()
+  let (sql1, p1) = children.query({ id: 1, name: "avengers", }).build()
   assert_eq(sql1, "SELECT id, name, team_id FROM heroes WHERE team_id = ?")
   assert_eq(p1.length(), 1)
   assert_eq(p1[0] == Int(1), true)
@@ -174,7 +174,7 @@ test "relation: has_many / belongs_to build the bound filter query" {
     Int(h.team_id)
   })
   let (sql2, p2) = parent
-    .query({ id: 12, name: "wolverine", team_id: 2 })
+    .query({ id: 12, name: "wolverine", team_id: 2, })
     .build()
   assert_eq(sql2, "SELECT id, name FROM teams WHERE id = ?")
   assert_eq(p2[0] == Int(2), true)
@@ -190,17 +190,17 @@ test "session.load / load_one decode related echoed rows into records" {
   let teams = team_model()
   // Seed one row whose echoed columns are (id, name) so team_model.from_row decodes it.
   mock.execute("seed", [Int(2), Text("x-men")]) |> ignore
-  let wolverine : Hero = { id: 12, name: "wolverine", team_id: 2 }
+  let wolverine : Hero = { id: 12, name: "wolverine", team_id: 2, }
   let parent : Relation[Hero, Team] = belongs_to(teams, "id", h => {
     Int(h.team_id)
   })
   // load_one returns the first decoded record.
   let one = sess.load_one(wolverine, parent)
-  assert_eq(one, Some({ id: 2, name: "x-men" }))
+  assert_eq(one, Some({ id: 2, name: "x-men", }))
   // load returns every decoded record (here, the single seeded row).
   let many = sess.load(wolverine, parent)
   assert_eq(many.length(), 1)
-  assert_eq(many[0], { id: 2, name: "x-men" })
+  assert_eq(many[0], { id: 2, name: "x-men", })
   sess.close()
 }
 
@@ -208,8 +208,8 @@ test "session.load / load_one decode related echoed rows into records" {
 test "session stream: raw and typed cursors yield the same records as the buffered forms" {
   let sess = Session::new(@moondb.MockDriver::new())
   let teams = team_model()
-  sess.insert_record(teams, { id: 1, name: "avengers" }) |> ignore
-  sess.insert_record(teams, { id: 2, name: "x-men" }) |> ignore
+  sess.insert_record(teams, { id: 1, name: "avengers", }) |> ignore
+  sess.insert_record(teams, { id: 2, name: "x-men", }) |> ignore
   // A raw cursor drains to exactly what fetch materialises.
   let buffered = sess.fetch(teams.select())
   let streamed = @moondb.drain(sess.stream(teams.select()))
@@ -221,6 +221,6 @@ test "session stream: raw and typed cursors yield the same records as the buffer
   for rec = rs.next(); rec is Some(t); rec = rs.next() {
     got.push(t)
   }
-  assert_eq(got, [{ id: 1, name: "avengers" }, { id: 2, name: "x-men" }])
+  assert_eq(got, [{ id: 1, name: "avengers", }, { id: 2, name: "x-men", }])
   sess.close()
 }

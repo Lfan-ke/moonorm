@@ -41,7 +41,7 @@ pub fn MysqlDriver::new(
   host? : String = "127.0.0.1",
   port? : Int = 3306,
 ) -> MysqlDriver {
-  { host, port, user, password, database }
+  { host, port, user, password, database, }
 }
 
 ///|
@@ -78,14 +78,8 @@ fn[T] MysqlDriver::with_conn(
           self.password,
           self.database,
         )
-        let out = op(conn) catch {
-          e => {
-            conn.close()
-            raise e
-          }
-        }
-        conn.close()
-        Ok(out)
+        defer conn.close()
+        Ok(op(conn))
       } catch {
         e => Err(to_db_error(e))
       }

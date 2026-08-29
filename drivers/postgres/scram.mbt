@@ -157,7 +157,7 @@ let b64_alphabet : String = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxy
 /// Standard base64 encoding (RFC 4648) with `=` padding.
 pub fn base64_encode(data : Bytes) -> String {
   let alpha = b64_alphabet.to_array()
-  let sb = StringBuilder::new()
+  let sb = StringBuilder()
   let n = data.length()
   let mut i = 0
   while i + 3 <= n {

@@ -81,11 +81,11 @@ test "bind_params rejects a parameter-count mismatch in both directions" {
 ///|
 test "build_text_rows decodes int, bigint, NULL, and binary blob columns" {
   let cols : Array[ColumnDef] = [
-    { name: "i", column_type: 3, charset: 63, flags: 0 }, // LONG -> Int
-    { name: "big", column_type: 8, charset: 63, flags: 0 }, // LONGLONG -> Int64
-    { name: "t", column_type: 253, charset: 33, flags: 0 }, // VAR_STRING utf8 -> Text
-    { name: "raw", column_type: 252, charset: 63, flags: 0 }, // BLOB binary -> Blob
-    { name: "n", column_type: 3, charset: 63, flags: 0 }, // NULL cell
+    { name: "i", column_type: 3, charset: 63, flags: 0, }, // LONG -> Int
+    { name: "big", column_type: 8, charset: 63, flags: 0, }, // LONGLONG -> Int64
+    { name: "t", column_type: 253, charset: 33, flags: 0, }, // VAR_STRING utf8 -> Text
+    { name: "raw", column_type: 252, charset: 63, flags: 0, }, // BLOB binary -> Blob
+    { name: "n", column_type: 3, charset: 63, flags: 0, }, // NULL cell
   ]
   let buf = Buffer()
   put_lenenc_bytes(buf, b"-2147483648")

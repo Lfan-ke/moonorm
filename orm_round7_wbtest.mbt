@@ -34,7 +34,7 @@ fn author_model() -> Model[Author] {
       field("id", IntType, a => Int(a.id), primary_key=true),
       field("name", TextType, a => Text(a.name), nullable=false),
     ],
-    r => { id: r.int(0), name: r.text(1) },
+    r => { id: r.int(0), name: r.text(1), },
   )
 }
 
@@ -52,7 +52,7 @@ fn book_model() -> Model[Book] {
         references=Some(("authors", "id")),
       ),
     ],
-    r => { id: r.int(0), title: r.text(1), author_id: r.int(2) },
+    r => { id: r.int(0), title: r.text(1), author_id: r.int(2), },
   )
 }
 
@@ -69,13 +69,13 @@ struct SpyDriver {
 
 ///|
 fn SpyDriver::new(rows : Array[@moondb.Row]) -> SpyDriver {
-  { log: [], rows, queries: 0 }
+  { log: [], rows, queries: 0, }
 }
 
 ///|
 pub impl @moondb.Driver for SpyDriver with fn execute(self, sql, _params) {
   self.log.push(sql)
-  { rows_affected: 1, last_insert_id: 0 }
+  { rows_affected: 1, last_insert_id: 0, }
 }
 
 ///|
@@ -116,7 +116,7 @@ fn book_row(id : Int, title : String, author_id : Int) -> @moondb.Row {
 
 ///|
 fn author_row(id : Int, name : String) -> @moondb.Row {
-  { columns: ["id", "name"], values: [Int(id), Text(name)] }
+  { columns: ["id", "name"], values: [Int(id), Text(name)], }
 }
 
 // --- declarative Field / from_fields -------------------------------------------
@@ -136,7 +136,7 @@ test "from_fields: columns, DDL, and insert binding are derived from the field l
   )
   // to_columns was never hand-written; the fields' encoders produce it.
   let (isql, ivals) = books
-    .insert_of({ id: 7, title: "Dune", author_id: 3 })
+    .insert_of({ id: 7, title: "Dune", author_id: 3, })
     .build()
   assert_eq(isql, "INSERT INTO books (id, title, author_id) VALUES (?, ?, ?)")
   assert_eq(ivals.length(), 3)
@@ -149,7 +149,7 @@ test "from_fields: columns, DDL, and insert binding are derived from the field l
 test "from_fields: a fetched row maps back into the record via from_row" {
   let books = book_model()
   let rec = books.map_row(book_row(1, "It", 2))
-  assert_eq(rec, { id: 1, title: "It", author_id: 2 })
+  assert_eq(rec, { id: 1, title: "It", author_id: 2, })
   assert_eq(field("id", IntType, (b : Book) => Int(b.id)).name(), "id")
 }
 
@@ -217,9 +217,9 @@ test "batch_query: one IN query over the distinct source keys" {
   // Two authors share id 1 (a duplicate key) — the IN list must carry it once.
   let (sql, params) = children
     .batch_query([
-      { id: 1, name: "a" },
-      { id: 2, name: "b" },
-      { id: 1, name: "c" },
+      { id: 1, name: "a", },
+      { id: 2, name: "b", },
+      { id: 1, name: "c", },
     ])
     .build()
   assert_eq(
@@ -243,19 +243,19 @@ test "load_batch: one query fetches every child, bucketed to its parent" {
     Int(a.id)
   })
   let authors : Array[Author] = [
-    { id: 1, name: "asimov" },
-    { id: 2, name: "banks" },
-    { id: 3, name: "clarke" }, // no books
+    { id: 1, name: "asimov", },
+    { id: 2, name: "banks", },
+    { id: 3, name: "clarke", }, // no books
   ]
   let loaded = sess.load_batch(authors, children)
   // Exactly one round trip — the whole point of batching.
   assert_eq(spy.queries, 1)
   assert_eq(loaded.length(), 3)
   assert_eq(loaded[0].length(), 2)
-  assert_eq(loaded[0][0], { id: 10, title: "A1", author_id: 1 })
-  assert_eq(loaded[0][1], { id: 11, title: "A2", author_id: 1 })
+  assert_eq(loaded[0][0], { id: 10, title: "A1", author_id: 1, })
+  assert_eq(loaded[0][1], { id: 11, title: "A2", author_id: 1, })
   assert_eq(loaded[1].length(), 1)
-  assert_eq(loaded[1][0], { id: 12, title: "B1", author_id: 2 })
+  assert_eq(loaded[1][0], { id: 12, title: "B1", author_id: 2, })
   assert_eq(loaded[2].length(), 0) // clarke has none
 }
 
@@ -281,15 +281,15 @@ test "load_one_batch: one query resolves each source's parent" {
     Int(b.author_id)
   })
   let books : Array[Book] = [
-    { id: 100, title: "Foundation", author_id: 1 },
-    { id: 101, title: "Culture", author_id: 2 },
-    { id: 102, title: "Orphan", author_id: 9 }, // no matching author
+    { id: 100, title: "Foundation", author_id: 1, },
+    { id: 101, title: "Culture", author_id: 2, },
+    { id: 102, title: "Orphan", author_id: 9, }, // no matching author
   ]
   let parents = sess.load_one_batch(books, parent)
   assert_eq(spy.queries, 1)
   assert_eq(parents.length(), 3)
-  assert_eq(parents[0], Some({ id: 1, name: "asimov" }))
-  assert_eq(parents[1], Some({ id: 2, name: "banks" }))
+  assert_eq(parents[0], Some({ id: 1, name: "asimov", }))
+  assert_eq(parents[1], Some({ id: 2, name: "banks", }))
   assert_eq(parents[2], None)
 }
 
@@ -339,12 +339,12 @@ test "begin_nested: release and rollback are idempotent and terminal" {
 
 ///|
 test "TxOptions::to_sql: standard SET TRANSACTION for Postgres/MySQL" {
-  let opts = { isolation: Some(Serializable), read_only: true }
+  let opts = { isolation: Some(Serializable), read_only: true, }
   assert_eq(opts.to_sql(Postgres), [
     "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE", "SET TRANSACTION READ ONLY",
   ])
   assert_eq(
-    { isolation: Some(ReadCommitted), read_only: false }.to_sql(Mysql),
+    { isolation: Some(ReadCommitted), read_only: false, }.to_sql(Mysql),
     ["SET TRANSACTION ISOLATION LEVEL READ COMMITTED"],
   )
   assert_eq(TxOptions::default().to_sql(Postgres), [])
@@ -353,19 +353,19 @@ test "TxOptions::to_sql: standard SET TRANSACTION for Postgres/MySQL" {
 ///|
 test "TxOptions::to_sql: SQLite renders PRAGMAs, only for what it supports" {
   assert_eq(
-    { isolation: Some(ReadUncommitted), read_only: true }.to_sql(Sqlite),
+    { isolation: Some(ReadUncommitted), read_only: true, }.to_sql(Sqlite),
     ["PRAGMA read_uncommitted = 1", "PRAGMA query_only = 1"],
   )
   // SQLite is serializable by default, so a stronger level needs no statement.
   assert_eq(
-    { isolation: Some(Serializable), read_only: false }.to_sql(Sqlite),
+    { isolation: Some(Serializable), read_only: false, }.to_sql(Sqlite),
     [],
   )
 }
 
 ///|
 test "begin_with: SET TRANSACTION lands after BEGIN on Postgres, before it on MySQL" {
-  let opts = { isolation: Some(Serializable), read_only: false }
+  let opts = { isolation: Some(Serializable), read_only: false, }
   let pg = SpyDriver::new([])
   Session::new(pg).begin_with(opts)
   assert_eq(pg.log, ["BEGIN", "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"])

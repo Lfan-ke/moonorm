@@ -200,8 +200,8 @@ test "OK packet: affected rows and last insert id" {
 /// covered off any backend and its mutation can be checked locally.
 fn sample_columns() -> Array[ColumnDef] {
   [
-    { name: "id", column_type: 3, charset: 63, flags: 0 }, // LONG (int)
-    { name: "name", column_type: 252, charset: 33, flags: 0 }, // BLOB w/ utf8 => Text
+    { name: "id", column_type: 3, charset: 63, flags: 0, }, // LONG (int)
+    { name: "name", column_type: 252, charset: 33, flags: 0, }, // BLOB w/ utf8 => Text
   ]
 }
 
@@ -217,9 +217,9 @@ test "text rows: decode (1, 'a') into typed moondb values" {
 ///|
 test "text rows: NULL sentinel, bigint, and binary blob" {
   let cols : Array[ColumnDef] = [
-    { name: "n", column_type: 3, charset: 63, flags: 0 }, // int, will be NULL
-    { name: "big", column_type: 8, charset: 63, flags: 0 }, // LONGLONG
-    { name: "raw", column_type: 252, charset: 63, flags: 0 }, // binary blob
+    { name: "n", column_type: 3, charset: 63, flags: 0, }, // int, will be NULL
+    { name: "big", column_type: 8, charset: 63, flags: 0, }, // LONGLONG
+    { name: "raw", column_type: 252, charset: 63, flags: 0, }, // binary blob
   ]
   let buf = Buffer()
   buf.write_byte(b'\xFB') // NULL for column n

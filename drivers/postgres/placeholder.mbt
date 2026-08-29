@@ -15,7 +15,7 @@
 /// literal `?` an application genuinely needs in output can be written `??`,
 /// which collapses to a single `?` (mirroring JDBC-style escaping).
 pub fn translate_placeholders(sql : String) -> String {
-  let sb = StringBuilder::new()
+  let sb = StringBuilder()
   let n = sql.length()
   let mut i = 0
   let mut param = 0

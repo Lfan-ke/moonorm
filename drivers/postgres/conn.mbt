@@ -44,18 +44,12 @@ pub async fn PgConn::connect(
   let tcp = @socket.Tcp::connect(addr) catch {
     e => raise @moondb.ConnectError("connect \{host}:\{port}: \{e}")
   }
-  let conn = PgConn::{ tcp, closed: false, streaming: false }
+  let conn = PgConn::{ tcp, closed: false, streaming: false, }
   // Close the socket on any handshake failure (a bad-password ErrorResponse is the
   // common case) — MoonBit has no fd finalizer, so a raise here would leak it.
-  try {
-    conn.write_all(build_startup(user, database))
-    conn.run_startup(user, password)
-  } catch {
-    e => {
-      conn.tcp.close()
-      raise e
-    }
-  }
+  errdefer conn.tcp.close()
+  conn.write_all(build_startup(user, database))
+  conn.run_startup(user, password)
   conn
 }
 
@@ -243,7 +237,7 @@ async fn PgConn::read_results(self : PgConn) -> QueryOutcome raise DbError {
         raise @moondb.QueryError(msg)
       }
       // 'Z' ReadyForQuery
-      90 => return QueryOutcome::{ rows, command_tag }
+      90 => return QueryOutcome::{ rows, command_tag, }
       // '1' ParseComplete / '2' BindComplete / 'n' NoData / 't' ParamDesc /
       // 'I' EmptyQueryResponse / 'S' ParameterStatus / 'N' NoticeResponse
       _ => ()
@@ -297,7 +291,7 @@ fn parse_data_row(
       values.push(decode_value(oid, false, raw))
     }
   }
-  @moondb.Row::{ columns: col_names, values }
+  @moondb.Row::{ columns: col_names, values, }
 }
 
 ///|
@@ -407,7 +401,7 @@ pub async fn PgConn::query_stream(
 ) -> PgRowStream raise DbError {
   self.send_statement(sql, params)
   self.streaming = true
-  { conn: self, col_names: [], col_oids: [], done: false }
+  { conn: self, col_names: [], col_oids: [], done: false, }
 }
 
 ///|

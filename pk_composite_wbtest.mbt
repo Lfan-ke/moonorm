@@ -13,7 +13,7 @@ test "composite primary key becomes a table-level constraint" {
       column("b", IntType, primary_key=true),
       column("note", TextType),
     ],
-    r => { a: r.int(0), b: r.int(1) },
+    r => { a: r.int(0), b: r.int(1), },
     x => [("a", @moondb.Int(x.a)), ("b", @moondb.Int(x.b))],
   )
   assert_eq(
@@ -27,7 +27,7 @@ test "a single primary key stays inline" {
   let m = Model::new(
     "one",
     [column("id", IntType, primary_key=true), column("v", TextType)],
-    r => { a: r.int(0), b: 0 },
+    r => { a: r.int(0), b: 0, },
     _ => [],
   )
   assert_eq(

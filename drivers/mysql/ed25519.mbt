@@ -84,13 +84,13 @@ fn ed_add(pp : EdPoint, qq : EdPoint) -> EdPoint {
   let dxy = edmod(ed_d * x1 * x2 * y1 * y2)
   let x3 = edmod((x1 * y2 + x2 * y1) * edinv(edmod(1 + dxy)))
   let y3 = edmod((y1 * y2 + x1 * x2) * edinv(edmod(1 - dxy)))
-  { x: x3, y: y3 }
+  { x: x3, y: y3, }
 }
 
 ///|
 /// Scalar multiplication `e · pt` by double-and-add.
 fn ed_mul(e : BigInt, pt : EdPoint) -> EdPoint {
-  let mut result : EdPoint = { x: 0, y: 1 }
+  let mut result : EdPoint = { x: 0, y: 1, }
   let mut addend = pt
   let mut k = e
   while k > (0 : BigInt) {
@@ -163,7 +163,7 @@ fn ed_expand(secret : Bytes) -> (BigInt, Bytes) {
 /// via [`ed_expand`]). Returns the 64-byte `R || S`: `r = SHA-512(prefix || M) mod
 /// l`, `R = [r]B`, `k = SHA-512(R || A || M) mod l`, `S = (r + k·s) mod l`.
 pub fn ed25519_sign(secret : Bytes, msg : Bytes) -> Bytes {
-  let base : EdPoint = { x: ed_bx, y: ed_by }
+  let base : EdPoint = { x: ed_bx, y: ed_by, }
   let (s, prefix) = ed_expand(secret)
   let big_a = ed_encode_point(ed_mul(s, base))
   let rbuf = Buffer()

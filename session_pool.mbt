@@ -13,12 +13,6 @@ pub fn[D : @moondb.Driver, T] Session::with_pool(
   f : (Session) -> T raise,
 ) -> T raise {
   let conn = pool.acquire()
-  let result = f(Session::new(conn)) catch {
-    e => {
-      pool.release(conn)
-      raise e
-    }
-  }
-  pool.release(conn)
-  result
+  defer pool.release(conn)
+  f(Session::new(conn))
 }
