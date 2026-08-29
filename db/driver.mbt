@@ -12,9 +12,10 @@
 ///
 /// `execute` and `query` both take `(sql, params)`. `sql` carries **positional
 /// placeholders** and `params` supplies one [`Value`] per placeholder, in order.
-/// Values are bound out-of-band by the driver and are **never** interpolated into
-/// the SQL text — that is what makes a moondb-based stack injection-safe all the
-/// way to the wire.
+/// A driver is expected to bind values out-of-band rather than interpolate them
+/// into the SQL text. A driver that cannot — the MySQL text protocol has no
+/// out-of-band binding until prepared statements land — has to escape for the
+/// server's actual `sql_mode`, and must say so in its own documentation.
 ///
 /// The placeholder token itself is dialect-specific and chosen by the driver
 /// (SQLite/MySQL use `?`, PostgreSQL uses `$1`, `$2`, …); a query layer that emits

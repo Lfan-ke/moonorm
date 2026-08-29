@@ -9,7 +9,7 @@ import {
 }
 
 // Values
-pub fn bind_params(String, Array[@moondb.Value]) -> Bytes raise MysqlError
+pub fn bind_params(String, Array[@moondb.Value], mode? : QuoteMode) -> Bytes raise MysqlError
 
 pub fn build_handshake_response(Handshake, String, Bytes, String) -> Bytes raise MysqlError
 
@@ -147,6 +147,11 @@ pub fn PacketReader::skip(Self, Int) -> Unit raise MysqlError
 pub fn PacketReader::string_nul(Self) -> Bytes raise MysqlError
 pub fn PacketReader::u8(Self) -> Int raise MysqlError
 pub fn PacketReader::uint_le(Self, Int) -> Int64 raise MysqlError
+
+pub(all) enum QuoteMode {
+  Backslash
+  DoubleQuote
+} derive(Eq)
 
 pub(all) enum ServerKind {
   MySQL

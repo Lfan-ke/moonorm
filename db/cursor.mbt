@@ -48,6 +48,7 @@ pub fn ArrayCursor::new(rows : Array[Row]) -> ArrayCursor {
 }
 
 ///|
+/// Hand back the next row, or `None` once the array is spent.
 pub impl Cursor for ArrayCursor with fn next(self : ArrayCursor) -> Row? raise DbError {
   if self.pos < self.rows.length() {
     let row = self.rows[self.pos]
@@ -59,6 +60,7 @@ pub impl Cursor for ArrayCursor with fn next(self : ArrayCursor) -> Row? raise D
 }
 
 ///|
+/// Nothing to release — the rows are already in memory.
 pub impl Cursor for ArrayCursor with fn close(self : ArrayCursor) -> Unit {
   self.pos = self.rows.length()
 }

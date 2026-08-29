@@ -47,6 +47,9 @@ pub fn MockDriver::in_transaction(self : MockDriver) -> Bool {
 }
 
 ///|
+/// Record the statement's parameters as a row and report one row affected, with an
+/// incrementing last-insert id. The SQL text is ignored on purpose: this driver
+/// exists to prove the ORM issued a statement, not to interpret it.
 pub impl Driver for MockDriver with fn execute(
   self : MockDriver,
   _sql : String,
@@ -65,6 +68,7 @@ pub impl Driver for MockDriver with fn execute(
 }
 
 ///|
+/// Return the recorded rows.
 pub impl Driver for MockDriver with fn query(
   self : MockDriver,
   _sql : String,
@@ -77,6 +81,8 @@ pub impl Driver for MockDriver with fn query(
 }
 
 ///|
+/// Open a transaction, or a SAVEPOINT when one is already open, so nesting depth is
+/// observable to a test.
 pub impl Driver for MockDriver with fn begin(self : MockDriver) -> Unit raise DbError {
   if self.closed {
     raise Closed
@@ -85,6 +91,7 @@ pub impl Driver for MockDriver with fn begin(self : MockDriver) -> Unit raise Db
 }
 
 ///|
+/// Close the innermost transaction or release the innermost savepoint.
 pub impl Driver for MockDriver with fn commit(self : MockDriver) -> Unit raise DbError {
   if self.closed {
     raise Closed
@@ -95,6 +102,7 @@ pub impl Driver for MockDriver with fn commit(self : MockDriver) -> Unit raise D
 }
 
 ///|
+/// Undo back to the innermost savepoint, or abandon the transaction.
 pub impl Driver for MockDriver with fn rollback(self : MockDriver) -> Unit raise DbError {
   if self.closed {
     raise Closed
@@ -106,6 +114,7 @@ pub impl Driver for MockDriver with fn rollback(self : MockDriver) -> Unit raise
 }
 
 ///|
+/// Mark the connection closed; every later call raises `Closed`.
 pub impl Driver for MockDriver with fn close(self : MockDriver) -> Unit {
   self.closed = true
 }

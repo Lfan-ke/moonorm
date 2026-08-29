@@ -18,6 +18,7 @@ pub struct MysqlConn {
   mut closed : Bool
   mut server_kind : @moon-mysql.ServerKind
   mut streaming : Bool
+  mut quote_mode : @moon-mysql.QuoteMode
 }
 pub async fn MysqlConn::begin(Self) -> Unit
 pub fn MysqlConn::close(Self) -> Unit

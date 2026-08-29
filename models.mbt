@@ -454,6 +454,9 @@ pub fn[S, T] Relation::source_value(self : Relation[S, T], source : S) -> Value 
 }
 
 ///|
+/// One SELECT covering every source's related rows — `key_column IN (…)` over the
+/// sources' keys — so loading a relation for a list costs one query instead of one
+/// per row. `source_value` is what buckets the results back.
 pub fn[S, T] Relation::batch_query(
   self : Relation[S, T],
   sources : Array[S],

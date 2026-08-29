@@ -524,18 +524,21 @@ pub fn Select::where_not_in_values(
 }
 
 ///|
+/// Order the result by a column. Repeated calls order by each in turn.
 pub fn Select::order_by(self : Select, col : String, ord : Order) -> Select {
   self.orders.push((col, ord))
   self
 }
 
 ///|
+/// Cap how many rows come back.
 pub fn Select::limit(self : Select, n : Int) -> Select {
   self.limit_ = Some(n)
   self
 }
 
 ///|
+/// Skip the first `n` rows. Paired with `limit` this is a page.
 pub fn Select::offset(self : Select, n : Int) -> Select {
   self.offset_ = Some(n)
   self
@@ -755,6 +758,8 @@ pub struct Insert {
 }
 
 ///|
+/// Start an INSERT into `table`. Values are bound, never spliced, so a column
+/// holding a quote or a semicolon is a value and not syntax.
 pub fn insert(table : String) -> Insert {
   { table, cols: [], vals: [], extra_rows: [], conflict: None, returning: [], }
 }
@@ -974,11 +979,14 @@ pub struct Update {
 }
 
 ///|
+/// Start an UPDATE of `table`. Without a `where_` it rewrites every row, which
+/// is what SQL does and what the caller asked for.
 pub fn update(table : String) -> Update {
   { table, cols: [], vals: [], conds: [], }
 }
 
 ///|
+/// Assign one column. Repeated calls set each, in the order given.
 pub fn Update::set(self : Update, col : String, val : Value) -> Update {
   self.cols.push(col)
   self.vals.push(val)
@@ -986,6 +994,7 @@ pub fn Update::set(self : Update, col : String, val : Value) -> Update {
 }
 
 ///|
+/// Narrow the update with `col op ?`. Conditions are ANDed together.
 pub fn Update::where_(
   self : Update,
   col : String,
@@ -997,6 +1006,8 @@ pub fn Update::where_(
 }
 
 ///|
+/// Render `(sql, params)`. The SET values come first and the WHERE values after,
+/// in the order the placeholders appear, which is the order every driver binds in.
 pub fn Update::build(self : Update) -> (String, Array[Value]) {
   let params : Array[Value] = []
   let setparts : Array[String] = []
@@ -1034,11 +1045,13 @@ pub struct Delete {
 }
 
 ///|
+/// Start a DELETE from `table`.
 pub fn delete(table : String) -> Delete {
   { table, conds: [], }
 }
 
 ///|
+/// Narrow the delete with `col op ?`. Conditions are ANDed together.
 pub fn Delete::where_(
   self : Delete,
   col : String,
@@ -1050,6 +1063,7 @@ pub fn Delete::where_(
 }
 
 ///|
+/// Render `(sql, params)`.
 pub fn Delete::build(self : Delete) -> (String, Array[Value]) {
   let params : Array[Value] = []
   let mut sql = "DELETE FROM " + self.table

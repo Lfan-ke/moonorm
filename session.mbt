@@ -167,6 +167,8 @@ pub(all) suberror LostUpdate {
 }
 
 ///|
+/// Prints the row and the version that was expected, which is what a caller needs
+/// to decide whether to reload and retry.
 pub impl Show for LostUpdate with fn output(self : LostUpdate, logger : &Logger) -> Unit {
   let LostUpdate(m) = self
   logger.write_string("LostUpdate: " + m)

@@ -38,6 +38,8 @@ pub fn DbError::to_string(self : DbError) -> String {
 }
 
 ///|
+/// Prints the failure with the detail the driver gave, so a log line says which
+/// statement failed rather than only that one did.
 pub impl Show for DbError with fn output(self : DbError, logger : &Logger) -> Unit {
   logger.write_string(self.to_string())
 }

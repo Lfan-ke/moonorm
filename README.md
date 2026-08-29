@@ -10,7 +10,7 @@
 
 </div>
 
-`moonorm` is the MoonBit counterpart to SQLAlchemy: the heart of SQLAlchemy Core — a **parameterized, injection-safe query builder** — plus a model/session execution layer. Values are never spliced into the SQL string; every bound value becomes a `?` placeholder plus an entry in a params list, so injection is impossible by construction.
+`moonorm` is the MoonBit counterpart to SQLAlchemy: the heart of SQLAlchemy Core — a **parameterized, injection-safe query builder** — plus a model/session execution layer. Values are never spliced into the SQL the builder produces: every bound value becomes a `?` placeholder plus an entry in a params list. How far that reaches depends on the driver — SQLite and Postgres bind out-of-band, while the MySQL driver still renders parameters as escaped literals over the text protocol (see its README), so there the safety rests on the escaper matching the server's `sql_mode` rather than on the wire format.
 
 `moonorm` owns **no driver contract of its own**. It is written entirely against the [`moondb`](https://github.com/Lfan-ke/moondb) interface — the standard database-access seam for MoonBit — so it is **pure MoonBit with zero C** and compiles on every backend (`wasm` / `wasm-gc` / `js` / `native`). A concrete backend is a separate package you supply: the native SQLite driver lives in [`moon-sqlite`](https://github.com/Lfan-ke/moon-sqlite), and a `Session` drives any `@moondb.Driver` — including the dependency-free `@moondb.MockDriver` for tests.
 
@@ -86,8 +86,8 @@ fn demo() -> Unit raise @moondb.DbError {
 `Session` also has `modify` (UPDATE), `remove` (DELETE), `begin` / `commit` /
 `rollback` (delegated to the driver's transaction bracket), nested transactions via
 `savepoint` / `rollback_to` / `release` (SQLAlchemy's `begin_nested`), and raw
-`execute` / `query`. Everything travels as bound parameters, so the injection-safety
-guarantee reaches all the way to the wire.
+`execute` / `query`. Everything travels as bound parameters as far as the driver
+carries them; see the note above on the MySQL text protocol.
 
 ## Models & relationships
 

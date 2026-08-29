@@ -20,6 +20,10 @@ pub struct MysqlConn {
   // pipeline, so issuing a command before the stream drains would read the old
   // result's leftover packets and desync the connection.
   mut streaming : Bool
+  // How this server reads a string literal. Asked for at connect time rather than
+  // assumed: under NO_BACKSLASH_ESCAPES a backslash-escaping writer leaves a
+  // value's own quote live, which is an injection.
+  mut quote_mode : @moon_mysql.QuoteMode
 }
 
 ///|
@@ -49,7 +53,43 @@ async fn MysqlConn::read_packet(self : MysqlConn) -> Bytes {
 
 ///|
 /// Write one packet: the header (payload length + `seq`) then the payload.
+///
+/// The length field is three bytes, so a payload of 2^24-1 or more goes out as
+/// several packets with the sequence id advancing, and a payload that is an exact
+/// multiple of the limit needs a trailing empty packet to say it has ended. Without
+/// the split the length silently wraps and the server reads the tail of the payload
+/// as the next packet header. Reachable in practice: a blob is hex-expanded to twice
+/// its size on the way out, so an 8 MB value crosses the boundary.
 async fn MysqlConn::write_packet(
+  self : MysqlConn,
+  seq : Int,
+  payload : Bytes,
+) -> Unit {
+  let limit = 0xFFFFFF
+  if payload.length() >= limit {
+    let mut off = 0
+    let mut s = seq
+    while off < payload.length() {
+      let end = if off + limit < payload.length() {
+        off + limit
+      } else {
+        payload.length()
+      }
+      self.write_one_packet(s, payload[off:end].to_owned())
+      s = (s + 1) & 0xFF
+      off = end
+    }
+    if payload.length() % limit == 0 {
+      self.write_one_packet(s, b"")
+    }
+    return
+  }
+  self.write_one_packet(seq, payload)
+}
+
+///|
+/// One wire packet, whose payload is already known to fit the three-byte length.
+async fn MysqlConn::write_one_packet(
   self : MysqlConn,
   seq : Int,
   payload : Bytes,
@@ -89,13 +129,53 @@ pub async fn MysqlConn::connect(
     closed: false,
     server_kind: @moon_mysql.ServerKind::MySQL,
     streaming: false,
+    quote_mode: @moon_mysql.QuoteMode::Backslash,
   }
   let pw = @utf8.encode(password[:])
   // Close the socket on any handshake failure — a bad-credentials ERR is the
   // common case, and MoonBit has no fd finalizer to reclaim a leaked socket.
   errdefer conn.tcp.close()
   conn.do_handshake(user, pw, database)
+  conn.learn_quoting()
   conn
+}
+
+///|
+/// Ask the server how it reads string literals and what the connection charset is,
+/// and refuse the connection when the pair is one this driver cannot escape safely.
+///
+/// The text protocol renders parameters as literals, so the escaping has to match
+/// the server's actual `sql_mode` — assuming backslashes are escapes when they are
+/// not is an injection, not a formatting difference. And in a charset where a
+/// multibyte character can end in `0x5C`, backslash escaping is unsafe no matter
+/// what: the quote that follows becomes the tail of a legitimate character. That
+/// combination is refused rather than served insecurely.
+async fn MysqlConn::learn_quoting(self : MysqlConn) -> Unit {
+  let rows = self.query("SELECT @@sql_mode, @@character_set_connection", [])
+  guard rows.length() > 0 else { return }
+  let mode_text = match rows[0].values[0] {
+    Text(t) => t
+    _ => ""
+  }
+  let charset = match rows[0].values[1] {
+    Text(t) => t
+    _ => ""
+  }
+  if mode_text.contains("NO_BACKSLASH_ESCAPES") {
+    self.quote_mode = @moon_mysql.QuoteMode::DoubleQuote
+    return
+  }
+  // The charsets whose trailing bytes can be 0x5C. Doubling a quote is safe in all
+  // of them; escaping with a backslash is not.
+  for unsafe_cs in ["gbk", "big5", "sjis", "cp932", "gb18030"] {
+    if charset == unsafe_cs {
+      raise @moon_mysql.ProtocolError(
+        "connection charset '" +
+        charset +
+        "' cannot be escaped safely without NO_BACKSLASH_ESCAPES or prepared statements",
+      )
+    }
+  }
 }
 
 ///|
@@ -292,7 +372,8 @@ pub async fn MysqlConn::execute(
   sql : String,
   params : Array[@moondb.Value],
 ) -> @moondb.ExecResult {
-  match self.command(@moon_mysql.bind_params(sql, params)) {
+  match
+    self.command(@moon_mysql.bind_params(sql, params, mode=self.quote_mode)) {
     Exec(ok) =>
       @moondb.ExecResult::{
         rows_affected: ok.affected_rows,
@@ -312,7 +393,8 @@ pub async fn MysqlConn::query(
   sql : String,
   params : Array[@moondb.Value],
 ) -> Array[@moondb.Row] {
-  match self.command(@moon_mysql.bind_params(sql, params)) {
+  match
+    self.command(@moon_mysql.bind_params(sql, params, mode=self.quote_mode)) {
     Rows(columns, row_payloads) =>
       @moon_mysql.build_text_rows(columns, row_payloads)
     Exec(_) => []
@@ -352,7 +434,9 @@ pub async fn MysqlConn::query_stream(
   }
   let payload = Buffer()
   payload.write_byte(b'\x03') // COM_QUERY
-  payload.write_bytes(@moon_mysql.bind_params(sql, params)[:])
+  payload.write_bytes(
+    @moon_mysql.bind_params(sql, params, mode=self.quote_mode)[:],
+  )
   self.write_packet(0, payload.to_bytes())
   let first = self.read_packet()
   if @moon_mysql.is_err_packet(first) {

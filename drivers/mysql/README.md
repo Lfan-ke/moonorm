@@ -170,3 +170,16 @@ value decode + the `@moondb.Driver` adapter + a real roundtrip. Planned next:
   dedicated temporal `Value` case once moondb grows one.
 - **Connection pooling** and a streaming `Rows` cursor.
 - **TLS** once `moonbitlang/async` exposes a client-side entry point.
+
+## Parameter binding
+
+The text protocol has no out-of-band binding, so `bind_params` renders each value as
+an escaped literal. That makes the escaping load-bearing rather than cosmetic: a
+connection asks the server for `@@sql_mode` and `@@character_set_connection` at
+connect time and escapes for what it finds — a doubled quote under
+`NO_BACKSLASH_ESCAPES`, a backslash otherwise. A charset whose characters can end in
+`0x5C` (gbk, big5, sjis, cp932, gb18030) cannot be escaped safely with backslashes at
+all, so such a connection is refused rather than served.
+
+Prepared statements (`COM_STMT_PREPARE` + the binary protocol) are what remove the
+question entirely, and are the next thing this driver needs.
