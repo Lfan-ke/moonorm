@@ -101,6 +101,7 @@ pub async fn PgConn::execute(Self, String, Array[@moondb.Value]) -> @moondb.Exec
 pub async fn PgConn::query(Self, String, Array[@moondb.Value]) -> Array[@moondb.Row] raise @moondb.DbError
 pub async fn PgConn::query_stream(Self, String, Array[@moondb.Value]) -> PgRowStream raise @moondb.DbError
 pub async fn PgConn::rollback(Self) -> Unit raise @moondb.DbError
+pub impl @moondb.AsyncDriver for PgConn
 
 pub struct PgDriver {
   host : String
@@ -111,7 +112,6 @@ pub struct PgDriver {
 }
 pub async fn PgDriver::connect(Self) -> PgConn raise @moondb.DbError
 pub fn PgDriver::new(host~ : String, port? : Int, user~ : String, password? : String, database~ : String) -> Self
-pub impl @moondb.Driver for PgDriver
 
 pub struct PgRowStream {
   conn : PgConn
@@ -121,6 +121,7 @@ pub struct PgRowStream {
 }
 pub async fn PgRowStream::close(Self) -> Unit raise @moondb.DbError
 pub async fn PgRowStream::next(Self) -> @moondb.Row? raise @moondb.DbError
+pub impl @moondb.AsyncCursor for PgRowStream
 
 // Type aliases
 pub using @moondb {type DbError}

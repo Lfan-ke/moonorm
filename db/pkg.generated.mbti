@@ -4,6 +4,8 @@ package "Lfan-ke/moondb"
 // Values
 pub fn drain(&Cursor) -> Array[Row] raise DbError
 
+pub async fn drain_async(&AsyncCursor) -> Array[Row] raise DbError
+
 // Errors
 pub(all) suberror DbError {
   ConnectError(String)
@@ -21,6 +23,13 @@ pub struct ArrayCursor {
 }
 pub fn ArrayCursor::new(Array[Row]) -> Self
 pub impl Cursor for ArrayCursor
+
+pub struct AsyncArrayCursor {
+  rows : Array[Row]
+  mut pos : Int
+}
+pub fn AsyncArrayCursor::new(Array[Row]) -> Self
+pub impl AsyncCursor for AsyncArrayCursor
 
 pub(all) struct ExecResult {
   rows_affected : Int64
@@ -105,6 +114,22 @@ pub impl Show for Value
 // Type aliases
 
 // Traits
+pub(open) trait AsyncCursor {
+  async fn next(Self) -> Row? raise DbError
+  async fn close(Self) -> Unit
+}
+
+pub(open) trait AsyncDriver {
+  async fn execute(Self, String, Array[Value]) -> ExecResult raise DbError
+  async fn query(Self, String, Array[Value]) -> Array[Row] raise DbError
+  async fn query_stream(Self, String, Array[Value]) -> &AsyncCursor raise DbError = _
+  async fn begin(Self) -> Unit raise DbError
+  async fn commit(Self) -> Unit raise DbError
+  async fn rollback(Self) -> Unit raise DbError
+  async fn close(Self) -> Unit
+  async fn ping(Self) -> Bool = _
+}
+
 pub(open) trait Cursor {
   fn next(Self) -> Row? raise DbError
   fn close(Self) -> Unit

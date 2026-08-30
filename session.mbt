@@ -109,10 +109,11 @@ pub fn Session::fetch(
 /// them — the bounded-memory counterpart to [`query`] (SQLAlchemy's
 /// `stream_results`). This seam is synchronous, so only a synchronous driver with
 /// incremental fetch streams lazily here: moon-sqlite steps its prepared statement
-/// row by row. The async wire drivers cannot stream through this sync seam (their
-/// cursor is async) — a `Session` over Postgres raises (the async-wall façade) and
-/// over MySQL falls back to a materialised cursor; for true lazy Postgres/MySQL
-/// streaming call `PgConn`/`MysqlConn::query_stream` directly under an event loop.
+/// row by row. A wire driver's cursor is async and cannot come through here at all
+/// — moon-postgres implements `@moondb.AsyncDriver` instead, so it never sits
+/// behind a `Session`; MySQL's synchronous adapter falls back to a materialised
+/// cursor. For lazy streaming over the wire call `PgConn`/`MysqlConn::query_stream`
+/// directly under an event loop.
 pub fn Session::query_stream(
   self : Session,
   sql : String,

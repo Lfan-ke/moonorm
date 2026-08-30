@@ -153,9 +153,9 @@ pub fn[T] Session::get_by(
   if slot.get(k) is Some(hit) {
     return Some(hit)
   }
-  let stmt = model.select()
+  let mut stmt = model.select()
   for i in 0..<cols.length() {
-    stmt.where_(cols[i], "=", key[i]) |> ignore
+    stmt = stmt.where_(cols[i], "=", key[i])
   }
   let (sql, params) = stmt.limit(1).build()
   let rows = self.driver.query(sql, params)
@@ -203,11 +203,11 @@ pub fn[T] Session::update_record(
 ) -> Unit raise @moondb.DbError {
   let key = record_key(model, record)
   let cols = model.pk_columns()
-  let stmt = update(model.table)
+  let mut stmt = update(model.table)
   let mut sets = 0
   for pair in (model.to_columns)(record) {
     if !cols.contains(pair.0) {
-      stmt.set(pair.0, pair.1) |> ignore
+      stmt = stmt.set(pair.0, pair.1)
       sets = sets + 1
     }
   }
@@ -218,12 +218,14 @@ pub fn[T] Session::update_record(
     )
   }
   for i in 0..<cols.length() {
-    stmt.where_(cols[i], "=", key[i]) |> ignore
+    stmt = stmt.where_(cols[i], "=", key[i])
   }
+  // A closure cannot capture a `mut` binding, so freeze the finished statement.
+  let q = stmt
   self.dirty.push({
     table: model.table,
     parents: model.parent_tables(),
-    emit: () => stmt.build(),
+    emit: () => q.build(),
     settle: () => self.remember(model, record),
     done: false,
   })
@@ -244,14 +246,16 @@ pub fn[T] Session::delete_record(
 ) -> Unit raise @moondb.DbError {
   let key = record_key(model, record)
   let cols = model.pk_columns()
-  let stmt = delete(model.table)
+  let mut stmt = delete(model.table)
   for i in 0..<cols.length() {
-    stmt.where_(cols[i], "=", key[i]) |> ignore
+    stmt = stmt.where_(cols[i], "=", key[i])
   }
+  // A closure cannot capture a `mut` binding, so freeze the finished statement.
+  let q = stmt
   self.deleted.push({
     table: model.table,
     parents: model.parent_tables(),
-    emit: () => stmt.build(),
+    emit: () => q.build(),
     settle: () => self.slot(model).remove(identity_key(key)),
     done: false,
   })

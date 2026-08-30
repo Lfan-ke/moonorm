@@ -1,6 +1,6 @@
 name = "Lfan-ke/moon-postgres"
 
-version = "0.2.1"
+version = "0.3.0"
 
 readme = "README.md"
 
@@ -10,11 +10,11 @@ license = "Apache-2.0"
 
 keywords = [ "postgres", "driver", "moondb", "wire", "database" ]
 
-description = "Pure-MoonBit PostgreSQL wire-protocol driver implementing @moondb.Driver — no C, like asyncpg."
+description = "Pure-MoonBit PostgreSQL wire-protocol driver implementing @moondb.AsyncDriver — no C, like asyncpg."
 
 preferred_target = "native"
 
 import {
-  "Lfan-ke/moondb@0.1.6",
+  "Lfan-ke/moondb@0.1.7",
   "moonbitlang/async@0.20.3",
 }

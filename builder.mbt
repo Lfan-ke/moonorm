@@ -14,6 +14,17 @@ pub(all) enum Order {
 } derive(Eq)
 
 ///|
+/// Where NULLs sort in an ORDER BY term (SQLAlchemy's `nulls_first()` /
+/// `nulls_last()`). `Auto` emits nothing and leaves the placement to the server,
+/// which differs: PostgreSQL sorts NULLs last ascending, SQLite first. `First` /
+/// `Last` say it explicitly; MySQL has no such syntax and rejects it.
+pub(all) enum Nulls {
+  Auto
+  First
+  Last
+} derive(Eq)
+
+///|
 /// The SQL dialect a statement renders for. Most of the builder is dialect-neutral
 /// — it emits `?` placeholders and standard clauses that every backend accepts —
 /// but a few constructs genuinely differ: upsert is `ON CONFLICT ... DO UPDATE` on
@@ -43,12 +54,96 @@ struct Cond {
 }
 
 ///|
-/// A single JOIN clause: its keyword (`JOIN` / `LEFT JOIN`), the joined table,
-/// and the raw `ON` predicate (an identifier-level expression, never a bound value).
+/// One ORDER BY term: the column, its direction, and where NULLs go.
+struct OrderTerm {
+  col : String
+  ord : Order
+  nulls : Nulls
+}
+
+///|
+fn order_term_sql(t : OrderTerm) -> String {
+  let base = t.col + " " + order_sql(t.ord)
+  match t.nulls {
+    Auto => base
+    First => base + " NULLS FIRST"
+    Last => base + " NULLS LAST"
+  }
+}
+
+///|
+/// Render one scalar comparison, pushing its bound value onto `params`. `= NULL` and
+/// `!= NULL` never match under three-valued logic, so a NULL equality folds to
+/// `IS NULL` / `IS NOT NULL` — SQLAlchemy's `== None` fold — and binds nothing.
+fn cond_sql(c : Cond, params : Array[Value]) -> String {
+  if c.val is Null && (c.op == "=" || c.op == "!=" || c.op == "<>") {
+    return c.col + (if c.op == "=" { " IS NULL" } else { " IS NOT NULL" })
+  }
+  params.push(c.val)
+  c.col + " " + c.op + " ?"
+}
+
+// ---- FROM sources ----
+
+///|
+/// What a `FROM` or a `JOIN` names. A bare table is `Tbl`; `Sub` is a derived table
+/// (a whole `Select`, whose bound values thread into the enclosing statement's
+/// params at the position the subquery renders); `Alias` names either of those, which
+/// PostgreSQL and MySQL require of a derived table; `Lateral` lets a derived table
+/// reference the columns of the sources to its left (PostgreSQL and MySQL 8.0.14+;
+/// SQLite has no LATERAL).
+pub(all) enum Source {
+  Tbl(String)
+  Sub(Select)
+  Alias(Source, String)
+  Lateral(Source)
+}
+
+///|
+/// What can stand where a table is expected. A `String` is the table name — so
+/// `select("users")` and `join("teams", …)` keep reading as they always did — and a
+/// `Source` is anything richer (a derived table, an alias, a LATERAL).
+pub(open) trait AsSource {
+  fn to_source(Self) -> Source
+}
+
+///|
+pub impl AsSource for String with fn to_source(self) {
+  Tbl(self)
+}
+
+///|
+pub impl AsSource for Source with fn to_source(self) {
+  self
+}
+
+///|
+/// Render a source, appending any bound values a derived table carries to `params`
+/// so they stay in the SQL text's left-to-right order.
+fn source_sql(src : Source, params : Array[Value]) -> String {
+  match src {
+    Tbl(name) => name
+    Sub(q) => {
+      let (sub_sql, sub_params) = q.build()
+      for p in sub_params {
+        params.push(p)
+      }
+      "(" + sub_sql + ")"
+    }
+    Alias(inner, name) => source_sql(inner, params) + " AS " + name
+    Lateral(inner) => "LATERAL " + source_sql(inner, params)
+  }
+}
+
+///|
+/// A single JOIN clause: its keyword (`JOIN` / `LEFT JOIN` / …), the joined source,
+/// and either a raw `ON` predicate (an identifier-level expression, never a bound
+/// value) or a `USING` column list. A `CROSS JOIN` carries neither.
 struct JoinClause {
   kind : String
-  table : String
+  src : Source
   on : String
+  using_ : Array[String]
 }
 
 ///|
@@ -62,6 +157,43 @@ fn join(parts : Array[String], sep : String) -> String {
   }
   out
 }
+
+// ---- expressions ----
+
+///|
+/// A function call as a column expression: `func("coalesce", ["a", "b"])` renders
+/// `coalesce(a, b)`. This is SQLAlchemy's `func.*` without the attribute magic — the
+/// arguments are identifier-level SQL, rendered verbatim like `Select::raw`, so bind
+/// a value by placing a `?` and passing it through the surrounding clause.
+pub fn func(name : String, args : Array[String]) -> String {
+  name + "(" + join(args, ", ") + ")"
+}
+
+///|
+/// A type conversion: `cast("price", "NUMERIC(10,2)")` renders
+/// `CAST(price AS NUMERIC(10,2))`. Identifier-level like `func`.
+pub fn cast(expr : String, ty : String) -> String {
+  "CAST(" + expr + " AS " + ty + ")"
+}
+
+///|
+/// A searched `CASE` expression: each `(condition, result)` pair becomes one
+/// `WHEN … THEN …`, and a non-empty `else_` the trailing `ELSE`. Identifier-level
+/// like `func`. With no branches there is nothing to test, so it folds to `else_`
+/// (or `NULL`), which is what an all-branchless `CASE` would evaluate to anyway.
+pub fn case_(whens : Array[(String, String)], else_? : String = "") -> String {
+  if whens.length() == 0 {
+    return if else_ == "" { "NULL" } else { else_ }
+  }
+  let parts : Array[String] = []
+  for w in whens {
+    parts.push("WHEN " + w.0 + " THEN " + w.1)
+  }
+  let tail = if else_ == "" { "" } else { " ELSE " + else_ }
+  "CASE " + join(parts, " ") + tail + " END"
+}
+
+// ---- predicates ----
 
 ///|
 /// A boolean predicate tree — the parameter-safe way to express arbitrary
@@ -83,7 +215,11 @@ pub(all) enum Predicate {
 /// multi-child `And`/`Or` is wrapped in parentheses so nesting composes correctly.
 pub fn Predicate::build(self : Predicate) -> (String, Array[Value]) {
   match self {
-    Cmp(col~, op~, val~) => (col + " " + op + " ?", [val])
+    Cmp(col~, op~, val~) => {
+      let params : Array[Value] = []
+      let sql = cond_sql({ col, op, val, }, params)
+      (sql, params)
+    }
     InList(col~, vals~, negated~) =>
       // Empty `IN` matches nothing, empty `NOT IN` matches everything (SQLAlchemy's
       // constant fold). `IN/NOT IN (NULL)` would get both wrong via three-valued
@@ -141,7 +277,7 @@ fn predicate_combine(
   (if parts.length() > 1 { "(" + body + ")" } else { body }, params)
 }
 
-// ---- SELECT ----
+// ---- WHERE ----
 
 ///|
 /// A `col IN (subquery)` / `col NOT IN (subquery)` predicate: the subquery is a
@@ -149,7 +285,7 @@ fn predicate_combine(
 /// rendered. Keeping subquery predicates separate from the scalar `conds` lets the
 /// builder concatenate the two params streams in the exact order the SQL text emits
 /// them (scalar predicates first, then subqueries), so binding stays index-aligned.
-struct SubCond {
+priv struct SubCond {
   col : String
   op : String
   sub : Select
@@ -161,11 +297,83 @@ struct SubCond {
 /// as its own placeholder, so a set-membership filter — the workhorse of an
 /// N+1-avoiding batch load, `WHERE fk IN (all the parent keys)` — stays fully
 /// parameterised.
-struct InCond {
+priv struct InCond {
   col : String
   negated : Bool
   vals : Array[Value]
 }
+
+///|
+/// The WHERE clause of any statement — SELECT, UPDATE and DELETE share it, so the
+/// three render identical SQL and bind their values in one order rather than three.
+struct Where {
+  conds : Array[Cond]
+  in_conds : Array[InCond]
+  sub_conds : Array[SubCond]
+  preds : Array[Predicate]
+}
+
+///|
+fn Where::new() -> Where {
+  { conds: [], in_conds: [], sub_conds: [], preds: [], }
+}
+
+///|
+fn Where::dup(self : Where) -> Where {
+  {
+    conds: self.conds.copy(),
+    in_conds: self.in_conds.copy(),
+    sub_conds: self.sub_conds.copy(),
+    preds: self.preds.copy(),
+  }
+}
+
+///|
+/// The conjunction of every attached predicate, or `""` when there is none, pushing
+/// bound values onto `params` in text order: scalar comparisons, then `IN (values)`,
+/// then subqueries, then predicate trees.
+fn Where::sql(self : Where, params : Array[Value]) -> String {
+  let parts : Array[String] = []
+  for c in self.conds {
+    parts.push(cond_sql(c, params))
+  }
+  for ic in self.in_conds {
+    // Empty `IN` matches nothing, empty `NOT IN` matches everything — a constant
+    // predicate, not `IN (NULL)` (which is never true under NULL logic).
+    if ic.vals.length() == 0 {
+      parts.push(if ic.negated { "1 = 1" } else { "1 = 0" })
+    } else {
+      let placeholders : Array[String] = []
+      for v in ic.vals {
+        placeholders.push("?")
+        params.push(v)
+      }
+      let op = if ic.negated { "NOT IN" } else { "IN" }
+      parts.push(ic.col + " " + op + " (" + join(placeholders, ", ") + ")")
+    }
+  }
+  for sc in self.sub_conds {
+    let (sub_sql, sub_params) = sc.sub.build()
+    parts.push(sc.col + " " + sc.op + " (" + sub_sql + ")")
+    for p in sub_params {
+      params.push(p)
+    }
+  }
+  for pred in self.preds {
+    let (ps, pp) = pred.build()
+    parts.push(ps)
+    for p in pp {
+      params.push(p)
+    }
+  }
+  if parts.length() == 0 {
+    ""
+  } else {
+    join(parts, " AND ")
+  }
+}
+
+// ---- SELECT ----
 
 ///|
 /// A common table expression: `name AS (subquery)`. CTEs render in a single leading
@@ -180,22 +388,22 @@ struct Cte {
 }
 
 ///|
-/// A SELECT statement builder.
+/// A SELECT statement builder. Every method is generative — it returns a new
+/// statement and leaves the receiver alone — so a half-built query is a safe base to
+/// branch from, which is what SQLAlchemy's statement API guarantees.
 pub struct Select {
-  table : String
+  from_ : Source
   ctes : Array[Cte]
   cols : Array[String]
   joins : Array[JoinClause]
-  conds : Array[Cond]
-  in_conds : Array[InCond]
-  sub_conds : Array[SubCond]
-  preds : Array[Predicate]
+  filter : Where
   groups : Array[String]
   havings : Array[Cond]
-  orders : Array[(String, Order)]
+  orders : Array[OrderTerm]
   // Set operations chained onto this query: (keyword, operand). The compound's
   // ORDER BY / LIMIT come from this outer `Select`, applying to the whole result.
   set_ops : Array[(String, Select)]
+  distinct_on_ : Array[String]
   mut distinct_ : Bool
   mut limit_ : Int?
   mut offset_ : Int?
@@ -222,25 +430,48 @@ pub(all) struct LockClause {
 } derive(Eq, Debug)
 
 ///|
-/// Start a SELECT over `table`.
-pub fn select(table : String) -> Select {
+/// Start a SELECT over `src` — a table name, or a `Source` for a derived table,
+/// an alias or a LATERAL.
+pub fn[S : AsSource] select(src : S) -> Select {
   {
-    table,
+    from_: src.to_source(),
     ctes: [],
     cols: [],
     joins: [],
-    conds: [],
-    in_conds: [],
-    sub_conds: [],
-    preds: [],
+    filter: Where::new(),
     groups: [],
     havings: [],
     orders: [],
     set_ops: [],
+    distinct_on_: [],
     distinct_: false,
     limit_: None,
     offset_: None,
     lock_: None,
+  }
+}
+
+///|
+/// The copy every builder method starts from: the arrays are cloned so the new
+/// statement can be extended without the receiver seeing it, while the `Select`s
+/// nested inside (subqueries, CTEs, compound operands) are shared, which is safe
+/// precisely because nothing is ever mutated in place.
+fn Select::dup(self : Select) -> Select {
+  {
+    from_: self.from_,
+    ctes: self.ctes.copy(),
+    cols: self.cols.copy(),
+    joins: self.joins.copy(),
+    filter: self.filter.dup(),
+    groups: self.groups.copy(),
+    havings: self.havings.copy(),
+    orders: self.orders.copy(),
+    set_ops: self.set_ops.copy(),
+    distinct_on_: self.distinct_on_.copy(),
+    distinct_: self.distinct_,
+    limit_: self.limit_,
+    offset_: self.offset_,
+    lock_: self.lock_,
   }
 }
 
@@ -257,7 +488,8 @@ pub fn Select::for_update(
   nowait? : Bool = false,
   skip_locked? : Bool = false,
 ) -> Select {
-  self.lock_ = Some({
+  let s = self.dup()
+  s.lock_ = Some({
     mode: if read {
       ForShare
     } else {
@@ -267,52 +499,70 @@ pub fn Select::for_update(
     nowait,
     skip_locked,
   })
-  self
+  s
 }
 
 ///|
 /// Deduplicate the result set: `SELECT DISTINCT`. Applies to this query's own
 /// projection (each operand of a set operation carries its own DISTINCT).
 pub fn Select::distinct(self : Select) -> Select {
-  self.distinct_ = true
-  self
+  let s = self.dup()
+  s.distinct_ = true
+  s
+}
+
+///|
+/// Keep the first row of each distinct `cols` group: `SELECT DISTINCT ON (a, b)`,
+/// PostgreSQL's extension. Which row is "first" is whatever `ORDER BY` says, so pair
+/// it with an `order_by` that leads with the same columns. Takes precedence over
+/// plain `distinct` when both are set; no other dialect accepts it.
+pub fn Select::distinct_on(self : Select, cols : Array[String]) -> Select {
+  let s = self.dup()
+  for c in cols {
+    s.distinct_on_.push(c)
+  }
+  s
 }
 
 ///|
 /// `UNION` this query with `other` — the combined rows with duplicates removed. A
-/// trailing ORDER BY / LIMIT on either query binds to the whole compound (standard
-/// SQL); to order or limit a single operand, wrap it as a subquery in its FROM.
+/// trailing ORDER BY / LIMIT on this query binds to the whole compound (standard
+/// SQL); one on `other` makes it a derived table so it keeps binding to `other`.
 pub fn Select::union(self : Select, other : Select) -> Select {
-  self.set_ops.push(("UNION", other))
-  self
+  self.set_op("UNION", other)
 }
 
 ///|
 /// `UNION ALL` — the combined rows keeping duplicates.
 pub fn Select::union_all(self : Select, other : Select) -> Select {
-  self.set_ops.push(("UNION ALL", other))
-  self
+  self.set_op("UNION ALL", other)
 }
 
 ///|
 /// `INTERSECT` — rows present in both queries.
 pub fn Select::intersect(self : Select, other : Select) -> Select {
-  self.set_ops.push(("INTERSECT", other))
-  self
+  self.set_op("INTERSECT", other)
 }
 
 ///|
 /// `EXCEPT` — rows in this query but not in `other` (SQL's set difference).
 pub fn Select::except_(self : Select, other : Select) -> Select {
-  self.set_ops.push(("EXCEPT", other))
-  self
+  self.set_op("EXCEPT", other)
+}
+
+///|
+fn Select::set_op(self : Select, op : String, other : Select) -> Select {
+  let s = self.dup()
+  s.set_ops.push((op, other))
+  s
 }
 
 ///|
 /// Add a projected column (no columns selects `*`).
 pub fn Select::column(self : Select, col : String) -> Select {
-  self.cols.push(col)
-  self
+  let s = self.dup()
+  s.cols.push(col)
+  s
 }
 
 ///|
@@ -320,15 +570,22 @@ pub fn Select::column(self : Select, col : String) -> Select {
 /// qualified `"users.id"`). Identical machinery to `column`; named for intent so
 /// call sites read as "this is an expression, not a plain column name".
 pub fn Select::raw(self : Select, expr : String) -> Select {
-  self.cols.push(expr)
-  self
+  let s = self.dup()
+  s.cols.push(expr)
+  s
+}
+
+///|
+/// Project an expression under a name: `expr AS name` (SQLAlchemy's `.label()`).
+/// The name is what the result row is keyed by, so it is what `from_row` reads.
+pub fn Select::label(self : Select, expr : String, name : String) -> Select {
+  self.raw(expr + " AS " + name)
 }
 
 ///|
 /// Project `COUNT(*)` — the most common aggregate. Sugar for `raw("COUNT(*)")`.
 pub fn Select::count(self : Select) -> Select {
-  self.cols.push("COUNT(*)")
-  self
+  self.raw("COUNT(*)")
 }
 
 ///|
@@ -360,30 +617,91 @@ pub fn Select::window(
     inner.push("ORDER BY " + join(oparts, ", "))
   }
   let over = expr + " OVER (" + join(inner, " ") + ")"
-  self.cols.push(if as_ == "" { over } else { over + " AS " + as_ })
-  self
+  self.raw(if as_ == "" { over } else { over + " AS " + as_ })
 }
 
 ///|
-/// Add an inner `JOIN table ON <on>`. The `on` predicate is rendered verbatim
+fn Select::add_join(
+  self : Select,
+  kind : String,
+  src : Source,
+  on : String,
+  using_ : Array[String],
+) -> Select {
+  let s = self.dup()
+  s.joins.push({ kind, src, on, using_, })
+  s
+}
+
+///|
+/// Add an inner `JOIN src ON <on>`. `src` is a table name or a `Source` (a derived
+/// table brings its bound values with it). The `on` predicate is rendered verbatim
 /// (it references columns, not bound values), so pass only trusted identifiers.
-pub fn Select::join(self : Select, table : String, on : String) -> Select {
-  self.joins.push({ kind: "JOIN", table, on, })
-  self
+pub fn[S : AsSource] Select::join(
+  self : Select,
+  src : S,
+  on : String,
+) -> Select {
+  self.add_join("JOIN", src.to_source(), on, [])
 }
 
 ///|
-/// Add a `LEFT JOIN table ON <on>`. See `join` for the `on` contract.
-pub fn Select::left_join(self : Select, table : String, on : String) -> Select {
-  self.joins.push({ kind: "LEFT JOIN", table, on, })
-  self
+/// Add a `LEFT JOIN src ON <on>` — every left row, matched or not. See `join`.
+pub fn[S : AsSource] Select::left_join(
+  self : Select,
+  src : S,
+  on : String,
+) -> Select {
+  self.add_join("LEFT JOIN", src.to_source(), on, [])
+}
+
+///|
+/// Add a `RIGHT JOIN src ON <on>` — every right row, matched or not. See `join`.
+/// SQLite gained it in 3.39; older versions need the join written the other way.
+pub fn[S : AsSource] Select::right_join(
+  self : Select,
+  src : S,
+  on : String,
+) -> Select {
+  self.add_join("RIGHT JOIN", src.to_source(), on, [])
+}
+
+///|
+/// Add a `FULL JOIN src ON <on>` — every row of both sides. See `join`. MySQL has
+/// no FULL JOIN; SQLite gained it in 3.39.
+pub fn[S : AsSource] Select::full_join(
+  self : Select,
+  src : S,
+  on : String,
+) -> Select {
+  self.add_join("FULL JOIN", src.to_source(), on, [])
+}
+
+///|
+/// Add a `CROSS JOIN src` — the cartesian product, which takes no `ON`. Paired with
+/// a `Lateral` source this is how a row-generating function is joined per row.
+pub fn[S : AsSource] Select::cross_join(self : Select, src : S) -> Select {
+  self.add_join("CROSS JOIN", src.to_source(), "", [])
+}
+
+///|
+/// Add a `JOIN src USING (a, b)` — the equi-join on columns of the same name in
+/// both tables, which also collapses each pair into one output column. `cols` are
+/// identifiers, rendered verbatim.
+pub fn[S : AsSource] Select::join_using(
+  self : Select,
+  src : S,
+  cols : Array[String],
+) -> Select {
+  self.add_join("JOIN", src.to_source(), "", cols)
 }
 
 ///|
 /// Add a `GROUP BY` column (repeatable; columns are emitted in call order).
 pub fn Select::group_by(self : Select, col : String) -> Select {
-  self.groups.push(col)
-  self
+  let s = self.dup()
+  s.groups.push(col)
+  s
 }
 
 ///|
@@ -396,8 +714,9 @@ pub fn Select::having(
   op : String,
   val : Value,
 ) -> Select {
-  self.havings.push({ col, op, val, })
-  self
+  let s = self.dup()
+  s.havings.push({ col, op, val, })
+  s
 }
 
 ///|
@@ -408,8 +727,9 @@ pub fn Select::where_(
   op : String,
   val : Value,
 ) -> Select {
-  self.conds.push({ col, op, val, })
-  self
+  let s = self.dup()
+  s.filter.conds.push({ col, op, val, })
+  s
 }
 
 ///|
@@ -425,8 +745,9 @@ pub fn Select::eq(self : Select, col : String, val : Value) -> Select {
 /// Predicates are ANDed with the other clauses, so mixing `eq(...)` and `where_pred(...)`
 /// composes as one conjunction.
 pub fn Select::where_pred(self : Select, pred : Predicate) -> Select {
-  self.preds.push(pred)
-  self
+  let s = self.dup()
+  s.filter.preds.push(pred)
+  s
 }
 
 ///|
@@ -436,8 +757,9 @@ pub fn Select::where_pred(self : Select, pred : Predicate) -> Select {
 /// the `WITH` clause leads the SQL text. `name` is a trusted identifier declared in
 /// code, never a bound value.
 pub fn Select::with_cte(self : Select, name : String, sub : Select) -> Select {
-  self.ctes.push({ name, sub, recursive: false, })
-  self
+  let s = self.dup()
+  s.ctes.push({ name, sub, recursive: false, })
+  s
 }
 
 ///|
@@ -456,8 +778,9 @@ pub fn Select::with_recursive(
   all? : Bool = false,
 ) -> Select {
   let sub = if all { anchor.union_all(step) } else { anchor.union(step) }
-  self.ctes.push({ name, sub, recursive: true, })
-  self
+  let s = self.dup()
+  s.ctes.push({ name, sub, recursive: true, })
+  s
 }
 
 ///|
@@ -465,8 +788,9 @@ pub fn Select::with_recursive(
 /// values splice in at the predicate's position, so a correlated or filtering
 /// subquery stays injection-safe exactly like a scalar `where_`.
 pub fn Select::where_in(self : Select, col : String, sub : Select) -> Select {
-  self.sub_conds.push({ col, op: "IN", sub, })
-  self
+  let s = self.dup()
+  s.filter.sub_conds.push({ col, op: "IN", sub, })
+  s
 }
 
 ///|
@@ -476,8 +800,9 @@ pub fn Select::where_not_in(
   col : String,
   sub : Select,
 ) -> Select {
-  self.sub_conds.push({ col, op: "NOT IN", sub, })
-  self
+  let s = self.dup()
+  s.filter.sub_conds.push({ col, op: "NOT IN", sub, })
+  s
 }
 
 ///|
@@ -506,8 +831,9 @@ pub fn Select::where_in_values(
   col : String,
   vals : Array[Value],
 ) -> Select {
-  self.in_conds.push({ col, negated: false, vals, })
-  self
+  let s = self.dup()
+  s.filter.in_conds.push({ col, negated: false, vals, })
+  s
 }
 
 ///|
@@ -519,37 +845,87 @@ pub fn Select::where_not_in_values(
   col : String,
   vals : Array[Value],
 ) -> Select {
-  self.in_conds.push({ col, negated: true, vals, })
-  self
+  let s = self.dup()
+  s.filter.in_conds.push({ col, negated: true, vals, })
+  s
 }
 
 ///|
-/// Order the result by a column. Repeated calls order by each in turn.
-pub fn Select::order_by(self : Select, col : String, ord : Order) -> Select {
-  self.orders.push((col, ord))
-  self
+/// Order the result by a column. Repeated calls order by each in turn. `nulls`
+/// places NULLs explicitly (`NULLS FIRST` / `NULLS LAST`); the default leaves it to
+/// the server, which is the only portable choice — MySQL rejects the syntax.
+pub fn Select::order_by(
+  self : Select,
+  col : String,
+  ord : Order,
+  nulls? : Nulls = Auto,
+) -> Select {
+  let s = self.dup()
+  s.orders.push({ col, ord, nulls, })
+  s
 }
 
 ///|
 /// Cap how many rows come back.
 pub fn Select::limit(self : Select, n : Int) -> Select {
-  self.limit_ = Some(n)
-  self
+  let s = self.dup()
+  s.limit_ = Some(n)
+  s
 }
 
 ///|
 /// Skip the first `n` rows. Paired with `limit` this is a page.
 pub fn Select::offset(self : Select, n : Int) -> Select {
-  self.offset_ = Some(n)
-  self
+  let s = self.dup()
+  s.offset_ = Some(n)
+  s
+}
+
+///|
+/// The alias given to a compound operand that has to become a derived table. It is
+/// the only name in that FROM, so one fixed name never collides.
+const COMPOUND_ALIAS : String = "_c"
+
+///|
+/// Wrap a rendered statement as a derived table. This is how a compound operand is
+/// grouped: parenthesising the operand is standard SQL but SQLite rejects it
+/// outright, while `SELECT * FROM (…) AS _c` is read the same way everywhere.
+fn derived(sql : String) -> String {
+  "SELECT * FROM (" + sql + ") AS " + COMPOUND_ALIAS
+}
+
+///|
+/// How tightly a set operator binds. The standard gives INTERSECT the higher
+/// precedence; SQLite instead groups every operator left to right, so a chain that
+/// mixes the two levels means different things on different servers unless the
+/// grouping is made explicit.
+fn set_prec(op : String) -> Int {
+  if op == "INTERSECT" {
+    2
+  } else {
+    1
+  }
+}
+
+///|
+/// Whether this query can stand as a compound operand as-is. A nested compound, a
+/// leading `WITH`, or a trailing `ORDER BY` / `LIMIT` / `OFFSET` / `FOR UPDATE`
+/// would otherwise re-bind to the enclosing compound rather than to this operand.
+fn Select::is_atom(self : Select) -> Bool {
+  self.set_ops.length() == 0 &&
+  self.ctes.length() == 0 &&
+  self.orders.length() == 0 &&
+  self.limit_ is None &&
+  self.offset_ is None &&
+  self.lock_ is None
 }
 
 ///|
 /// Render to `(sql, params)`, with `?` placeholders for every bound value. Bound
 /// values appear in the params list in the same left-to-right order they occur in
-/// the SQL text: CTE subqueries first (the leading `WITH`), then the `WHERE` scalar
-/// predicates, then the `WHERE` `IN (values)` predicates, then the `WHERE` subquery
-/// predicates, then `HAVING`.
+/// the SQL text: CTE subqueries first (the leading `WITH`), then any derived table
+/// in `FROM` and the joins, then the `WHERE` predicates, then `HAVING`, then the
+/// set-operation operands.
 pub fn Select::build(self : Select) -> (String, Array[Value]) {
   let params : Array[Value] = []
   let mut sql = ""
@@ -569,62 +945,30 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
       join(cte_parts, ", ") +
       " "
   }
+  let head = if self.distinct_on_.length() > 0 {
+    "DISTINCT ON (" + join(self.distinct_on_, ", ") + ") "
+  } else if self.distinct_ {
+    "DISTINCT "
+  } else {
+    ""
+  }
   sql = sql +
     "SELECT " +
-    (if self.distinct_ { "DISTINCT " } else { "" }) +
+    head +
     (if self.cols.length() == 0 { "*" } else { join(self.cols, ", ") }) +
     " FROM " +
-    self.table
+    source_sql(self.from_, params)
   for j in self.joins {
-    sql = sql + " " + j.kind + " " + j.table + " ON " + j.on
+    sql = sql + " " + j.kind + " " + source_sql(j.src, params)
+    if j.using_.length() > 0 {
+      sql = sql + " USING (" + join(j.using_, ", ") + ")"
+    } else if j.on != "" {
+      sql = sql + " ON " + j.on
+    }
   }
-  if self.conds.length() > 0 ||
-    self.in_conds.length() > 0 ||
-    self.sub_conds.length() > 0 ||
-    self.preds.length() > 0 {
-    let cparts : Array[String] = []
-    for c in self.conds {
-      // `= NULL` / `!= NULL` never match under three-valued logic; rewrite a NULL
-      // equality to `IS NULL` / `IS NOT NULL` the way SQLAlchemy folds `== None`.
-      if c.val is Null && (c.op == "=" || c.op == "!=" || c.op == "<>") {
-        cparts.push(
-          c.col + (if c.op == "=" { " IS NULL" } else { " IS NOT NULL" }),
-        )
-        continue
-      }
-      cparts.push(c.col + " " + c.op + " ?")
-      params.push(c.val)
-    }
-    for ic in self.in_conds {
-      // Empty `IN` matches nothing, empty `NOT IN` matches everything — a constant
-      // predicate, not `IN (NULL)` (which is never true under NULL logic).
-      if ic.vals.length() == 0 {
-        cparts.push(if ic.negated { "1 = 1" } else { "1 = 0" })
-      } else {
-        let placeholders : Array[String] = []
-        for v in ic.vals {
-          placeholders.push("?")
-          params.push(v)
-        }
-        let op = if ic.negated { "NOT IN" } else { "IN" }
-        cparts.push(ic.col + " " + op + " (" + join(placeholders, ", ") + ")")
-      }
-    }
-    for sc in self.sub_conds {
-      let (sub_sql, sub_params) = sc.sub.build()
-      cparts.push(sc.col + " " + sc.op + " (" + sub_sql + ")")
-      for p in sub_params {
-        params.push(p)
-      }
-    }
-    for pred in self.preds {
-      let (ps, pp) = pred.build()
-      cparts.push(ps)
-      for p in pp {
-        params.push(p)
-      }
-    }
-    sql = sql + " WHERE " + join(cparts, " AND ")
+  let where_sql = self.filter.sql(params)
+  if where_sql != "" {
+    sql = sql + " WHERE " + where_sql
   }
   if self.groups.length() > 0 {
     sql = sql + " GROUP BY " + join(self.groups, ", ")
@@ -632,25 +976,40 @@ pub fn Select::build(self : Select) -> (String, Array[Value]) {
   if self.havings.length() > 0 {
     let hparts : Array[String] = []
     for h in self.havings {
-      hparts.push(h.col + " " + h.op + " ?")
-      params.push(h.val)
+      hparts.push(cond_sql(h, params))
     }
     sql = sql + " HAVING " + join(hparts, " AND ")
   }
   // Set operations chain after this query's core; a trailing ORDER BY / LIMIT then
   // applies to the whole compound (SQL binds them to the last query otherwise).
+  // `low` tracks the loosest-binding operator already in the chain: appending a
+  // tighter one would silently re-group everything to its left, so that left side
+  // becomes a derived table first.
+  let mut low = 99
   for so in self.set_ops {
     let (op, other) = so
+    let prec = set_prec(op)
+    if prec > low {
+      sql = derived(sql)
+      low = 99
+    }
     let (sub_sql, sub_params) = other.build()
-    sql = sql + " " + op + " " + sub_sql
+    sql = sql +
+      " " +
+      op +
+      " " +
+      (if other.is_atom() { sub_sql } else { derived(sub_sql) })
     for p in sub_params {
       params.push(p)
+    }
+    if prec < low {
+      low = prec
     }
   }
   if self.orders.length() > 0 {
     let oparts : Array[String] = []
     for o in self.orders {
-      oparts.push(o.0 + " " + order_sql(o.1))
+      oparts.push(order_term_sql(o))
     }
     sql = sql + " ORDER BY " + join(oparts, ", ")
   }
@@ -745,8 +1104,17 @@ struct Conflict {
 }
 
 ///|
+fn Conflict::dup(self : Conflict) -> Conflict {
+  {
+    targets: self.targets.copy(),
+    assigns: self.assigns.copy(),
+    do_nothing: self.do_nothing,
+  }
+}
+
+///|
 /// An INSERT statement builder, with optional upsert (`ON CONFLICT`) and
-/// `RETURNING` support.
+/// `RETURNING` support. Generative like `Select`.
 pub struct Insert {
   table : String
   cols : Array[String]
@@ -765,11 +1133,27 @@ pub fn insert(table : String) -> Insert {
 }
 
 ///|
+fn Insert::dup(self : Insert) -> Insert {
+  {
+    table: self.table,
+    cols: self.cols.copy(),
+    vals: self.vals.copy(),
+    extra_rows: self.extra_rows.copy(),
+    conflict: match self.conflict {
+      Some(c) => Some(c.dup())
+      None => None
+    },
+    returning: self.returning.copy(),
+  }
+}
+
+///|
 /// Set a column to a value.
 pub fn Insert::set(self : Insert, col : String, val : Value) -> Insert {
-  self.cols.push(col)
-  self.vals.push(val)
-  self
+  let ins = self.dup()
+  ins.cols.push(col)
+  ins.vals.push(val)
+  ins
 }
 
 ///|
@@ -778,8 +1162,9 @@ pub fn Insert::set(self : Insert, col : String, val : Value) -> Insert {
 /// binds as its own placeholder, so a bulk insert stays injection-safe; each `row`
 /// must supply one value per column.
 pub fn Insert::values(self : Insert, row : Array[Value]) -> Insert {
-  self.extra_rows.push(row)
-  self
+  let ins = self.dup()
+  ins.extra_rows.push(row)
+  ins
 }
 
 ///|
@@ -804,20 +1189,21 @@ fn Insert::ensure_conflict(self : Insert) -> Conflict {
 /// `build_for(Mysql)` ignores it (MySQL infers the key), so pass it regardless and
 /// the right dialect uses it.
 pub fn Insert::on_conflict(self : Insert, targets : Array[String]) -> Insert {
-  let c = self.ensure_conflict()
+  let ins = self.dup()
+  let c = ins.ensure_conflict()
   for t in targets {
     c.targets.push(t)
   }
-  self
+  ins
 }
 
 ///|
 /// On a conflict, set `col` to a bound value (`col = ?`). The value binds as a
 /// parameter after the inserted values, so an upsert stays injection-safe.
 pub fn Insert::do_update(self : Insert, col : String, val : Value) -> Insert {
-  let c = self.ensure_conflict()
-  c.assigns.push({ col, value: Bound(val), })
-  self
+  let ins = self.dup()
+  ins.ensure_conflict().assigns.push({ col, value: Bound(val), })
+  ins
 }
 
 ///|
@@ -825,9 +1211,9 @@ pub fn Insert::do_update(self : Insert, col : String, val : Value) -> Insert {
 /// (`excluded.col` on SQLite/PostgreSQL, `VALUES(col)` on MySQL). This is the
 /// "overwrite with the incoming row" upsert.
 pub fn Insert::do_update_excluded(self : Insert, col : String) -> Insert {
-  let c = self.ensure_conflict()
-  c.assigns.push({ col, value: Excluded, })
-  self
+  let ins = self.dup()
+  ins.ensure_conflict().assigns.push({ col, value: Excluded, })
+  ins
 }
 
 ///|
@@ -835,8 +1221,9 @@ pub fn Insert::do_update_excluded(self : Insert, col : String) -> Insert {
 /// NOTHING`). MySQL has no such form, so `build_for(Mysql)` renders a no-op
 /// self-assignment instead.
 pub fn Insert::do_nothing(self : Insert) -> Insert {
-  self.ensure_conflict().do_nothing = true
-  self
+  let ins = self.dup()
+  ins.ensure_conflict().do_nothing = true
+  ins
 }
 
 ///|
@@ -845,15 +1232,15 @@ pub fn Insert::do_nothing(self : Insert) -> Insert {
 /// default/trigger-computed value back in the same round trip instead of a second
 /// SELECT. Repeatable. `build_for(Mysql)` drops it — MySQL has no `RETURNING`.
 pub fn Insert::returning(self : Insert, col : String) -> Insert {
-  self.returning.push(col)
-  self
+  let ins = self.dup()
+  ins.returning.push(col)
+  ins
 }
 
 ///|
 /// Return every column of each inserted row (`RETURNING *`). See `returning`.
 pub fn Insert::returning_all(self : Insert) -> Insert {
-  self.returning.push("*")
-  self
+  self.returning("*")
 }
 
 ///|
@@ -885,16 +1272,26 @@ pub fn Insert::build_for(
     }
     tuples.push("(" + join(ph, ", ") + ")")
   }
-  emit_tuple(self.vals)
+  // Without a `set` there is no first row; emitting one anyway would put an empty
+  // `()` tuple in front of the bulk rows.
+  if self.vals.length() > 0 {
+    emit_tuple(self.vals)
+  }
   for row in self.extra_rows {
     emit_tuple(row)
   }
-  let mut sql = "INSERT INTO " +
-    self.table +
-    " (" +
-    join(self.cols, ", ") +
-    ") VALUES " +
-    join(tuples, ", ")
+  let mut sql = "INSERT INTO " + self.table
+  if self.cols.length() > 0 {
+    sql = sql + " (" + join(self.cols, ", ") + ")"
+  }
+  if tuples.length() == 0 {
+    // Nothing to insert but the row itself: the column list is empty too, and an
+    // empty `() VALUES ()` is MySQL's spelling where the others say DEFAULT VALUES.
+    sql = sql +
+      (if dialect == Mysql { " () VALUES ()" } else { " DEFAULT VALUES" })
+  } else {
+    sql = sql + " VALUES " + join(tuples, ", ")
+  }
   match self.conflict {
     Some(c) => sql = sql + render_conflict(c, dialect, self.cols, params)
     None => ()
@@ -970,27 +1367,65 @@ fn render_conflict(
 // ---- UPDATE ----
 
 ///|
-/// An UPDATE statement builder.
+/// What one `SET` assigns: a bound value (`col = ?`), or an expression rendered
+/// verbatim with its own placeholders, which is the only way to write a column in
+/// terms of itself (`n = n + ?`).
+enum Assign {
+  Bind(Value)
+  Expr(String, Array[Value])
+}
+
+///|
+/// An UPDATE statement builder. Generative like `Select`, and it shares the same
+/// WHERE clause, so `where_pred` / `where_in` narrow an update exactly as they
+/// narrow a query.
 pub struct Update {
   table : String
-  cols : Array[String]
-  vals : Array[Value]
-  conds : Array[Cond]
+  sets : Array[(String, Assign)]
+  filter : Where
+  returning : Array[String]
 }
 
 ///|
 /// Start an UPDATE of `table`. Without a `where_` it rewrites every row, which
 /// is what SQL does and what the caller asked for.
 pub fn update(table : String) -> Update {
-  { table, cols: [], vals: [], conds: [], }
+  { table, sets: [], filter: Where::new(), returning: [], }
 }
 
 ///|
-/// Assign one column. Repeated calls set each, in the order given.
+fn Update::dup(self : Update) -> Update {
+  {
+    table: self.table,
+    sets: self.sets.copy(),
+    filter: self.filter.dup(),
+    returning: self.returning.copy(),
+  }
+}
+
+///|
+/// Assign one column a bound value. Repeated calls set each, in the order given.
 pub fn Update::set(self : Update, col : String, val : Value) -> Update {
-  self.cols.push(col)
-  self.vals.push(val)
-  self
+  let u = self.dup()
+  u.sets.push((col, Bind(val)))
+  u
+}
+
+///|
+/// Assign one column an expression instead of a value — `set_expr("n", "n + ?",
+/// vals=[Int(1)])` renders `SET n = n + ?`. The expression is rendered verbatim, so
+/// it can read the row's current columns, which a bound value cannot; anything that
+/// varies belongs in `vals`, one per `?`, and binds in the order the placeholders
+/// appear.
+pub fn Update::set_expr(
+  self : Update,
+  col : String,
+  expr : String,
+  vals? : Array[Value] = [],
+) -> Update {
+  let u = self.dup()
+  u.sets.push((col, Expr(expr, vals)))
+  u
 }
 
 ///|
@@ -1001,36 +1436,95 @@ pub fn Update::where_(
   op : String,
   val : Value,
 ) -> Update {
-  self.conds.push({ col, op, val, })
-  self
+  let u = self.dup()
+  u.filter.conds.push({ col, op, val, })
+  u
 }
 
 ///|
-/// Render `(sql, params)`. The SET values come first and the WHERE values after,
-/// in the order the placeholders appear, which is the order every driver binds in.
+/// Narrow the update with a boolean `Predicate` tree — the `AND`/`OR`/`NOT`
+/// grouping the flat `where_` cannot express. See `Select::where_pred`.
+pub fn Update::where_pred(self : Update, pred : Predicate) -> Update {
+  let u = self.dup()
+  u.filter.preds.push(pred)
+  u
+}
+
+///|
+/// Narrow the update with `col IN (subquery)` — "update the rows some other query
+/// picks out". The subquery's bound values splice in at the predicate's position.
+pub fn Update::where_in(self : Update, col : String, sub : Select) -> Update {
+  let u = self.dup()
+  u.filter.sub_conds.push({ col, op: "IN", sub, })
+  u
+}
+
+///|
+/// Narrow the update with `col NOT IN (subquery)`. See `where_in`.
+pub fn Update::where_not_in(
+  self : Update,
+  col : String,
+  sub : Select,
+) -> Update {
+  let u = self.dup()
+  u.filter.sub_conds.push({ col, op: "NOT IN", sub, })
+  u
+}
+
+///|
+/// Return `col` from each updated row (SQLite 3.35+, PostgreSQL). Repeatable;
+/// `build_for(Mysql)` drops it.
+pub fn Update::returning(self : Update, col : String) -> Update {
+  let u = self.dup()
+  u.returning.push(col)
+  u
+}
+
+///|
+/// Return every column of each updated row (`RETURNING *`). See `returning`.
+pub fn Update::returning_all(self : Update) -> Update {
+  self.returning("*")
+}
+
+///|
+/// Render `(sql, params)` for the SQLite/PostgreSQL dialect. The SET values come
+/// first and the WHERE values after, in the order the placeholders appear, which is
+/// the order every driver binds in.
 pub fn Update::build(self : Update) -> (String, Array[Value]) {
+  self.build_for(Sqlite)
+}
+
+///|
+/// Render `(sql, params)` for `dialect`. Identical everywhere but `RETURNING`,
+/// which MySQL does not have and so does not get.
+pub fn Update::build_for(
+  self : Update,
+  dialect : Dialect,
+) -> (String, Array[Value]) {
   let params : Array[Value] = []
   let setparts : Array[String] = []
-  for i = 0; i < self.cols.length(); i = i + 1 {
-    setparts.push(self.cols[i] + " = ?")
-    params.push(self.vals[i])
+  for pair in self.sets {
+    let (col, assign) = pair
+    match assign {
+      Bind(v) => {
+        setparts.push(col + " = ?")
+        params.push(v)
+      }
+      Expr(expr, vals) => {
+        setparts.push(col + " = " + expr)
+        for v in vals {
+          params.push(v)
+        }
+      }
+    }
   }
   let mut sql = "UPDATE " + self.table + " SET " + join(setparts, ", ")
-  if self.conds.length() > 0 {
-    let cparts : Array[String] = []
-    for c in self.conds {
-      // `= NULL` / `!= NULL` never match under three-valued logic; rewrite a NULL
-      // equality to `IS NULL` / `IS NOT NULL` the way SQLAlchemy folds `== None`.
-      if c.val is Null && (c.op == "=" || c.op == "!=" || c.op == "<>") {
-        cparts.push(
-          c.col + (if c.op == "=" { " IS NULL" } else { " IS NOT NULL" }),
-        )
-        continue
-      }
-      cparts.push(c.col + " " + c.op + " ?")
-      params.push(c.val)
-    }
-    sql = sql + " WHERE " + join(cparts, " AND ")
+  let where_sql = self.filter.sql(params)
+  if where_sql != "" {
+    sql = sql + " WHERE " + where_sql
+  }
+  if self.returning.length() > 0 && dialect != Mysql {
+    sql = sql + " RETURNING " + join(self.returning, ", ")
   }
   (sql, params)
 }
@@ -1038,16 +1532,27 @@ pub fn Update::build(self : Update) -> (String, Array[Value]) {
 // ---- DELETE ----
 
 ///|
-/// A DELETE statement builder.
+/// A DELETE statement builder. Generative like `Select`, and it shares the same
+/// WHERE clause.
 pub struct Delete {
   table : String
-  conds : Array[Cond]
+  filter : Where
+  returning : Array[String]
 }
 
 ///|
 /// Start a DELETE from `table`.
 pub fn delete(table : String) -> Delete {
-  { table, conds: [], }
+  { table, filter: Where::new(), returning: [], }
+}
+
+///|
+fn Delete::dup(self : Delete) -> Delete {
+  {
+    table: self.table,
+    filter: self.filter.dup(),
+    returning: self.returning.copy(),
+  }
 }
 
 ///|
@@ -1058,30 +1563,77 @@ pub fn Delete::where_(
   op : String,
   val : Value,
 ) -> Delete {
-  self.conds.push({ col, op, val, })
-  self
+  let d = self.dup()
+  d.filter.conds.push({ col, op, val, })
+  d
 }
 
 ///|
-/// Render `(sql, params)`.
+/// Narrow the delete with a boolean `Predicate` tree. See `Select::where_pred`.
+pub fn Delete::where_pred(self : Delete, pred : Predicate) -> Delete {
+  let d = self.dup()
+  d.filter.preds.push(pred)
+  d
+}
+
+///|
+/// Narrow the delete with `col IN (subquery)` — "delete the rows some other query
+/// picks out". The subquery's bound values splice in at the predicate's position.
+pub fn Delete::where_in(self : Delete, col : String, sub : Select) -> Delete {
+  let d = self.dup()
+  d.filter.sub_conds.push({ col, op: "IN", sub, })
+  d
+}
+
+///|
+/// Narrow the delete with `col NOT IN (subquery)`. See `where_in`.
+pub fn Delete::where_not_in(
+  self : Delete,
+  col : String,
+  sub : Select,
+) -> Delete {
+  let d = self.dup()
+  d.filter.sub_conds.push({ col, op: "NOT IN", sub, })
+  d
+}
+
+///|
+/// Return `col` from each deleted row (SQLite 3.35+, PostgreSQL) — the row's
+/// contents survive the delete only if you ask for them here. Repeatable;
+/// `build_for(Mysql)` drops it.
+pub fn Delete::returning(self : Delete, col : String) -> Delete {
+  let d = self.dup()
+  d.returning.push(col)
+  d
+}
+
+///|
+/// Return every column of each deleted row (`RETURNING *`). See `returning`.
+pub fn Delete::returning_all(self : Delete) -> Delete {
+  self.returning("*")
+}
+
+///|
+/// Render `(sql, params)` for the SQLite/PostgreSQL dialect.
 pub fn Delete::build(self : Delete) -> (String, Array[Value]) {
+  self.build_for(Sqlite)
+}
+
+///|
+/// Render `(sql, params)` for `dialect`. Identical everywhere but `RETURNING`,
+/// which MySQL does not have and so does not get.
+pub fn Delete::build_for(
+  self : Delete,
+  dialect : Dialect,
+) -> (String, Array[Value]) {
   let params : Array[Value] = []
   let mut sql = "DELETE FROM " + self.table
-  if self.conds.length() > 0 {
-    let cparts : Array[String] = []
-    for c in self.conds {
-      // `= NULL` / `!= NULL` never match under three-valued logic; rewrite a NULL
-      // equality to `IS NULL` / `IS NOT NULL` the way SQLAlchemy folds `== None`.
-      if c.val is Null && (c.op == "=" || c.op == "!=" || c.op == "<>") {
-        cparts.push(
-          c.col + (if c.op == "=" { " IS NULL" } else { " IS NOT NULL" }),
-        )
-        continue
-      }
-      cparts.push(c.col + " " + c.op + " ?")
-      params.push(c.val)
-    }
-    sql = sql + " WHERE " + join(cparts, " AND ")
+  let where_sql = self.filter.sql(params)
+  if where_sql != "" {
+    sql = sql + " WHERE " + where_sql
+  }
+  if self.returning.length() > 0 && dialect != Mysql {
+    sql = sql + " RETURNING " + join(self.returning, ", ")
   }
   (sql, params)
 }

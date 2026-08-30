@@ -1,6 +1,6 @@
 # moon-postgres
 
-A **pure-MoonBit PostgreSQL driver** — the v3 frontend/backend wire protocol spoken directly over async TCP, with **zero C** and no `libpq`. Like [asyncpg](https://github.com/MagicStack/asyncpg) or [pg8000](https://github.com/tlocke/pg8000), it talks to a real PostgreSQL server itself. It implements the [`@moondb.Driver`](https://mooncakes.io/docs/Lfan-ke/moondb) contract, so a moondb-based stack (e.g. `moonorm`) can sit on top of it.
+A **pure-MoonBit PostgreSQL driver** — the v3 frontend/backend wire protocol spoken directly over async TCP, with **zero C** and no `libpq`. Like [asyncpg](https://github.com/MagicStack/asyncpg) or [pg8000](https://github.com/tlocke/pg8000), it talks to a real PostgreSQL server itself. `PgConn` implements the [`@moondb.AsyncDriver`](https://mooncakes.io/docs/Lfan-ke/moondb) contract, so a moondb-based stack (e.g. `moonorm`) can sit on top of it.
 
 ```
 moon add Lfan-ke/moon-postgres
@@ -65,11 +65,22 @@ sequenceDiagram
 - **Simple query** (`Q`) when there are no parameters; **extended query** (`Parse`/`Bind`/`Describe`/`Execute`/`Sync`) when there are, with `?`→`$n` translation and out-of-band **text-format** binding.
 - **Decoding** — `RowDescription` + `DataRow` decode into `@moondb.Row`; column type OIDs map `int2`/`int4`→`Int`, `int8`→`Int64`, `float4`/`float8`→`Double`, `bool`→`Bool`, `bytea`→`Blob`, everything else→`Text`.
 
-## The async wall
+## Why the driver is async
 
 `@moondb.Driver`'s methods are **synchronous** (`fn execute(...) raise DbError`), which fits an FFI-backed driver like `moon-sqlite` whose C calls block. PostgreSQL is reached over TCP, and MoonBit's only socket stack (`moonbitlang/async`) is **async-only**: an `async fn` cannot be called from a synchronous one, and the runtime exposes no public "run this async thunk to completion" bridge (`with_event_loop` lives in an import-blocked `internal` package). A synchronous method therefore cannot perform a PostgreSQL round trip.
 
-So the faithful, working driver is the async **`PgConn`**, and it is what the CI integration suite drives against a live server. `PgDriver` still **implements every `@moondb.Driver` method** to demonstrate the seam and give moondb-based code a stable target; its row-touching methods raise a precise `ConnectError` directing callers to `PgConn`, and `PgDriver::connect` returns the real async connection. When moondb grows an async `Driver` variant — or MoonBit ships a blocking socket / a public event-loop entry — `PgDriver` becomes a thin adapter over `PgConn` with no change for callers.
+That is why moondb has a second seam. **`PgConn` implements [`@moondb.AsyncDriver`]** — the same eight operations as `Driver`, every one of them awaited — and `PgDriver` is now just the connection descriptor you open one from. Use it inside an event loop (`async test` / `async fn main`):
+
+```moonbit
+async fn main {
+  let conn = PgDriver::new(host="127.0.0.1", user="postgres", database="app").connect()
+  defer conn.close()
+  let drv : &@moondb.AsyncDriver = conn
+  let rows = drv.query("SELECT id, name FROM users WHERE id = ?", [@moondb.Int(1)])
+}
+```
+
+Before this, `PgDriver` implemented the *synchronous* `Driver` by raising from every row-touching method. That was worse than useless in one specific way: `ping` is a defaulted method built on `query`, so it swallowed the raise and returned `false`, and any `Pool` with `pre_ping` judged every connection permanently unhealthy. The raising façade is gone.
 
 This is the language-idiomatic equivalent, not a shortcut: asyncpg is async for exactly the same reason.
 
@@ -82,13 +93,12 @@ The `DataRow` decoder is mutation-checked: breaking it makes the decode test fai
 
 ## Roadmap
 
-This round covers connect + auth (MD5/trust) + simple query + text decode + `?`→`$n` + `@moondb.Driver` conformance + a real round trip. Later rounds:
+This round covers connect + auth (MD5/trust) + simple query + text decode + `?`→`$n` + `@moondb.AsyncDriver` conformance + a real round trip. Later rounds:
 
 - **SCRAM-SHA-256** authentication (the default for PostgreSQL 14+ with a password set).
 - **Binary result/parameter format** and a **type-OID registry** (numeric, dates/times, arrays, JSON, UUID).
 - **Prepared statements** (named, cached) and a streaming `Rows` cursor.
 - **`RETURNING`**-based `last_insert_id`, `COPY`, `LISTEN`/`NOTIFY`, TLS, and a connection pool.
-- An **async `Driver`** trait in moondb so `PgDriver` becomes a first-class synchronous-signature adapter over `PgConn`.
 
 ## License
 

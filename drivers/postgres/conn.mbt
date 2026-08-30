@@ -1,10 +1,9 @@
 // Copyright 2026 Leo Cheng
 // SPDX-License-Identifier: Apache-2.0
 
-// The async PostgreSQL connection — the real driver. Every network round trip
-// is async (MoonBit sockets are async-only), so this is the asyncpg-shaped
-// core; the synchronous @moondb.Driver conformance is a façade over it (see
-// driver.mbt and README §"The async wall").
+// The async PostgreSQL connection — the driver itself. Every network round trip
+// is async (MoonBit sockets are async-only), so this is the asyncpg-shaped core;
+// the @moondb.AsyncDriver conformance in driver.mbt delegates straight to it.
 
 ///|
 /// A live connection to a PostgreSQL backend, already past the startup

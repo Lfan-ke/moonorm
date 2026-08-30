@@ -9,6 +9,10 @@ import {
 // Values
 pub fn[S, T] belongs_to(Model[T], String, (S) -> @moondb.Value) -> Relation[S, T]
 
+pub fn case_(Array[(String, String)], else_? : String) -> String
+
+pub fn cast(String, String) -> String
+
 pub fn column(String, ColumnType, primary_key? : Bool, autoincrement? : Bool, nullable? : Bool, unique? : Bool, default? : String?, checks? : Array[String], references? : (String, String)?, on_delete? : String?, on_update? : String?) -> Column
 
 pub fn delete(String) -> Delete
@@ -16,6 +20,8 @@ pub fn delete(String) -> Delete
 pub fn diff_schema(Array[Column], Array[Column]) -> Array[ColumnDiff]
 
 pub fn[T] field(String, ColumnType, (T) -> @moondb.Value, primary_key? : Bool, autoincrement? : Bool, nullable? : Bool, unique? : Bool, default? : String?, checks? : Array[String], references? : (String, String)?, on_delete? : String?, on_update? : String?) -> Field[T]
+
+pub fn func(String, Array[String]) -> String
 
 pub fn[S, T] has_many(Model[T], String, (S) -> @moondb.Value) -> Relation[S, T]
 
@@ -35,7 +41,7 @@ pub fn reflect_table(&@moondb.Driver, String) -> Array[Column] raise @moondb.DbE
 
 pub fn reflect_table_for(&@moondb.Driver, String, Dialect) -> Array[Column] raise @moondb.DbError
 
-pub fn select(String) -> Select
+pub fn[S : AsSource] select(S) -> Select
 
 pub fn update(String) -> Update
 
@@ -46,6 +52,8 @@ pub(all) suberror LostUpdate {
 pub impl Show for LostUpdate
 
 // Types and methods
+type Assign
+
 pub(all) struct Column {
   name : String
   col_type : ColumnType
@@ -92,10 +100,17 @@ type Cte
 
 pub struct Delete {
   table : String
-  conds : Array[Cond]
+  filter : Where
+  returning : Array[String]
 }
 pub fn Delete::build(Self) -> (String, Array[@moondb.Value])
+pub fn Delete::build_for(Self, Dialect) -> (String, Array[@moondb.Value])
+pub fn Delete::returning(Self, String) -> Self
+pub fn Delete::returning_all(Self) -> Self
 pub fn Delete::where_(Self, String, String, @moondb.Value) -> Self
+pub fn Delete::where_in(Self, String, Select) -> Self
+pub fn Delete::where_not_in(Self, String, Select) -> Self
+pub fn Delete::where_pred(Self, Predicate) -> Self
 
 pub(all) enum Dialect {
   Sqlite
@@ -108,8 +123,6 @@ pub struct Field[T] {
   encode : (T) -> @moondb.Value
 }
 pub fn[T] Field::name(Self[T]) -> String
-
-type InCond
 
 pub struct Insert {
   table : String
@@ -200,10 +213,18 @@ pub fn[T] Model::pk_of(Self[T], T) -> Array[@moondb.Value]
 pub fn[T] Model::select(Self[T]) -> Select
 pub fn[T] Model::table_descriptor(Self[T]) -> Table
 
+pub(all) enum Nulls {
+  Auto
+  First
+  Last
+} derive(Eq)
+
 pub(all) enum Order {
   Asc
   Desc
 } derive(Eq)
+
+type OrderTerm
 
 pub(all) enum Predicate {
   Cmp(col~ : String, op~ : String, val~ : @moondb.Value)
@@ -245,18 +266,16 @@ pub fn Savepoint::release(Self) -> Unit raise @moondb.DbError
 pub fn Savepoint::rollback(Self) -> Unit raise @moondb.DbError
 
 pub struct Select {
-  table : String
+  from_ : Source
   ctes : Array[Cte]
   cols : Array[String]
   joins : Array[JoinClause]
-  conds : Array[Cond]
-  in_conds : Array[InCond]
-  sub_conds : Array[SubCond]
-  preds : Array[Predicate]
+  filter : Where
   groups : Array[String]
   havings : Array[Cond]
-  orders : Array[(String, Order)]
+  orders : Array[OrderTerm]
   set_ops : Array[(String, Select)]
+  distinct_on_ : Array[String]
   mut distinct_ : Bool
   mut limit_ : Int?
   mut offset_ : Int?
@@ -265,19 +284,25 @@ pub struct Select {
 pub fn Select::build(Self) -> (String, Array[@moondb.Value])
 pub fn Select::column(Self, String) -> Self
 pub fn Select::count(Self) -> Self
+pub fn[S : AsSource] Select::cross_join(Self, S) -> Self
 pub fn Select::distinct(Self) -> Self
+pub fn Select::distinct_on(Self, Array[String]) -> Self
 pub fn Select::eq(Self, String, @moondb.Value) -> Self
 pub fn Select::except_(Self, Self) -> Self
 pub fn Select::for_update(Self, read? : Bool, of? : Array[String], nowait? : Bool, skip_locked? : Bool) -> Self
+pub fn[S : AsSource] Select::full_join(Self, S, String) -> Self
 pub fn Select::group_by(Self, String) -> Self
 pub fn Select::having(Self, String, String, @moondb.Value) -> Self
 pub fn Select::intersect(Self, Self) -> Self
-pub fn Select::join(Self, String, String) -> Self
-pub fn Select::left_join(Self, String, String) -> Self
+pub fn[S : AsSource] Select::join(Self, S, String) -> Self
+pub fn[S : AsSource] Select::join_using(Self, S, Array[String]) -> Self
+pub fn Select::label(Self, String, String) -> Self
+pub fn[S : AsSource] Select::left_join(Self, S, String) -> Self
 pub fn Select::limit(Self, Int) -> Self
 pub fn Select::offset(Self, Int) -> Self
-pub fn Select::order_by(Self, String, Order) -> Self
+pub fn Select::order_by(Self, String, Order, nulls? : Nulls) -> Self
 pub fn Select::raw(Self, String) -> Self
+pub fn[S : AsSource] Select::right_join(Self, S, String) -> Self
 pub fn Select::union(Self, Self) -> Self
 pub fn Select::union_all(Self, Self) -> Self
 pub fn Select::where_(Self, String, String, @moondb.Value) -> Self
@@ -345,7 +370,13 @@ pub fn[T] Session::stream_as(Self, Model[T], Select) -> RowStream[T] raise @moon
 pub fn[T] Session::update_record(Self, Model[T], T) -> Unit raise @moondb.DbError
 pub fn[D : @moondb.Driver, T] Session::with_pool(@moondb.Pool[D], (Self) -> T raise) -> T raise
 
-type SubCond
+pub(all) enum Source {
+  Tbl(String)
+  Sub(Select)
+  Alias(Source, String)
+  Lateral(Source)
+}
+pub impl AsSource for Source
 
 pub(all) struct Table {
   name : String
@@ -362,13 +393,22 @@ pub fn TxOptions::to_sql(Self, Dialect) -> Array[String]
 
 pub struct Update {
   table : String
-  cols : Array[String]
-  vals : Array[@moondb.Value]
-  conds : Array[Cond]
+  sets : Array[(String, Assign)]
+  filter : Where
+  returning : Array[String]
 }
 pub fn Update::build(Self) -> (String, Array[@moondb.Value])
+pub fn Update::build_for(Self, Dialect) -> (String, Array[@moondb.Value])
+pub fn Update::returning(Self, String) -> Self
+pub fn Update::returning_all(Self) -> Self
 pub fn Update::set(Self, String, @moondb.Value) -> Self
+pub fn Update::set_expr(Self, String, String, vals? : Array[@moondb.Value]) -> Self
 pub fn Update::where_(Self, String, String, @moondb.Value) -> Self
+pub fn Update::where_in(Self, String, Select) -> Self
+pub fn Update::where_not_in(Self, String, Select) -> Self
+pub fn Update::where_pred(Self, Predicate) -> Self
+
+type Where
 
 type Work
 
@@ -376,3 +416,7 @@ type Work
 pub using @moondb {type Value}
 
 // Traits
+pub(open) trait AsSource {
+  fn to_source(Self) -> Source
+}
+pub impl AsSource for String

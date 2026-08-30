@@ -56,6 +56,8 @@ moon add Lfan-ke/moondb
 | [`DbError`](#dberror) | the one error every operation raises | DB-API exception hierarchy (flattened) |
 | [`Driver`](#driver) | the trait a backend implements / a query layer targets (with a default `ping` health probe) | Go `driver.Conn`+`Execer`+`Queryer`+`Pinger` |
 | [`Pool`](#pool) | a fixed-ceiling connection pool over any `Driver` | Go `sql.DB` pool, SQLAlchemy `QueuePool` |
+| [`AsyncDriver`](#asyncdriver) | the same contract for a backend reached over a socket, every method awaited | asyncpg / `asyncio` DB-API |
+| [`AsyncCursor`](#asyncdriver) | forward-only cursor whose `next` is awaited, for a wire driver's live rows | — |
 | [`MockDriver`](#mockdriver) | dependency-free in-memory reference driver, for tests | — |
 
 ### The binding contract
@@ -108,6 +110,8 @@ pub impl @moondb.Driver for MyConn with execute(self, sql, params) {
 - **Why raise, not `Result`.** Typed accessors and driver calls `raise DbError` rather than returning `Result[_, DbError]`, so a decode bug or a dropped connection surfaces at the call site instead of being silently swallowed. A caller opts into recovery with `try`/`catch`.
 - **Typed accessors are strict.** `row.int(i)` raises `TypeError` if the cell is not an integer — including when it is `NULL`. Guard nullable columns with `is_null` first. Integer→integer and integer→double conversions are allowed and lossless; `int` narrows an `Int64` and says so.
 - **`DbError` is `pub(all)`.** A plain `pub suberror` can be *caught* from another package but not *constructed* — which would stop out-of-tree drivers from raising it. `pub(all)` opens the constructors.
+- **There are two driver traits, on purpose.** `Driver` is synchronous, which is right for a backend whose calls block in C (moon-sqlite steps a prepared statement and returns). A backend reached over TCP cannot be written that way: MoonBit's only socket stack is async-only, and an `async fn` cannot be called from a synchronous one. A wire driver forced to conform to `Driver` can do nothing but raise from every method — and because `ping` is a *defaulted* method built on `query`, it swallows that raise into `false`, so a `Pool` with `pre_ping` judges every one of its connections permanently unhealthy. `AsyncDriver` is the seam for those backends: the same eight operations, each awaited. It is a peer of `Driver`, not a replacement — a synchronous backend keeps implementing `Driver` and never becomes async. Declaring async methods pulls in no async runtime, so moondb stays dependency-free and still compiles on every backend; only a driver that implements the trait, and a caller that runs it in an event loop, need one.
+
 - **The pool is synchronous.** `Pool[D]` reuses idle connections under a size ceiling, evicts a connection that fails its `pre_ping` probe or outlives `max_lifetime` (age measured by an injected `clock`, the way `database/sql` swaps `nowFunc` in tests), and offers a non-blocking `try_acquire`. Because moondb's base contract is sync and the pure backends have no threads, an exhausted `acquire` fails immediately rather than blocking — the `acquire_timeout` is the budget an async driver layers real waiting on top of. `ping` is a default `Driver` method (`SELECT 1`), so every driver gets a health probe for free.
 
 ## Roadmap

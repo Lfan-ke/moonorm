@@ -300,18 +300,3 @@ async test "integration: upsert ON CONFLICT DO UPDATE and RETURNING round-trip" 
   assert_eq(after[0].int(0), 9) // unchanged by DO NOTHING
   conn.close()
 }
-
-///|
-test "PgDriver conforms to @moondb.Driver; sync I/O raises (async wall)" {
-  let d = PgDriver::new(host="127.0.0.1", user="postgres", database="test")
-  let drv : &@moondb.Driver = d
-  let raised = try {
-    drv.execute("SELECT 1", []) |> ignore
-    false
-  } catch {
-    _ => true
-  }
-  assert_eq(raised, true)
-  // close is best-effort and must never raise
-  drv.close()
-}

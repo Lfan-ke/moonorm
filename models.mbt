@@ -420,9 +420,9 @@ pub fn[T] Model::create_table_sql(
 /// Build an `Insert` that persists `record`, binding the pairs from `to_columns`.
 /// Values travel as `?` placeholders exactly like the rest of the builder.
 pub fn[T] Model::insert_of(self : Model[T], record : T) -> Insert {
-  let ins = insert(self.table)
+  let mut ins = insert(self.table)
   for pair in (self.to_columns)(record) {
-    ins.set(pair.0, pair.1) |> ignore
+    ins = ins.set(pair.0, pair.1)
   }
   ins
 }
