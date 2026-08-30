@@ -1,6 +1,6 @@
 name = "Lfan-ke/moon-mysql"
 
-version = "0.3.0"
+version = "0.3.1"
 
 readme = "README.md"
 
@@ -15,6 +15,6 @@ description = "Pure-MoonBit MySQL wire-protocol driver implementing @moondb.Driv
 preferred_target = "native"
 
 import {
-  "Lfan-ke/moondb@0.1.6",
+  "Lfan-ke/moondb@0.1.7",
   "moonbitlang/async@0.20.3",
 }
