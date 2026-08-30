@@ -19,12 +19,36 @@ pub struct Session {
   // unique within the session even after earlier ones are released.
   mut sp_depth : Int
   mut sp_seq : Int
+  // Names this session's slot in the identity map of every model it touches (see
+  // `Model::ident`).
+  id : Int
+  pending : Array[Work]
+  dirty : Array[Work]
+  deleted : Array[Work]
+  // Drops this session's identity slot out of each model it claimed one in. A model
+  // is normally a long-lived top-level value, so nothing else would ever free it.
+  detach : Array[() -> Unit]
 }
+
+///|
+/// Session serials. Identity maps live in the models rather than the session, so a
+/// session needs a name no other live session shares.
+let session_seq : Ref[Int] = Ref(0)
 
 ///|
 /// Wrap a connected driver in a session.
 pub fn Session::new(driver : &@moondb.Driver) -> Session {
-  { driver, sp_depth: 0, sp_seq: 0, }
+  session_seq.val = session_seq.val + 1
+  {
+    driver,
+    sp_depth: 0,
+    sp_seq: 0,
+    id: session_seq.val,
+    pending: [],
+    dirty: [],
+    deleted: [],
+    detach: [],
+  }
 }
 
 ///|
@@ -54,9 +78,14 @@ pub fn Session::query(
 }
 
 ///|
-/// Build and run an `Insert`, returning the affected-row count and new rowid. This
-/// renders the SQLite/PostgreSQL form (`ON CONFLICT` upserts, `RETURNING`); for a
-/// MySQL upsert build the dialect form explicitly — `session.execute(stmt.build_for(Mysql))`.
+/// Build and run an `Insert` **now**, returning the affected-row count and new
+/// rowid. This is the statement-level form: it goes to the driver on this call and
+/// never touches the unit of work. To queue a record instead and let `flush` order
+/// and emit it, use `add_record`.
+///
+/// This renders the SQLite/PostgreSQL form (`ON CONFLICT` upserts, `RETURNING`); for
+/// a MySQL upsert build the dialect form explicitly —
+/// `session.execute(stmt.build_for(Mysql))`.
 pub fn Session::add(
   self : Session,
   stmt : Insert,
@@ -206,14 +235,21 @@ pub fn Session::begin(self : Session) -> Unit raise @moondb.DbError {
 }
 
 ///|
-/// Commit the current transaction.
+/// Flush the unit of work, then commit the current transaction. Queued records reach
+/// the database here if nothing has flushed them yet, which is why a caller can add
+/// and commit without naming `flush` at all. With an empty queue this is the bare
+/// driver commit.
 pub fn Session::commit(self : Session) -> Unit raise @moondb.DbError {
+  self.flush()
   self.driver.commit()
 }
 
 ///|
-/// Roll back the current transaction.
+/// Roll back the current transaction, abandoning whatever is still queued and
+/// emptying the identity map. The records held there describe rows the rollback has
+/// just undone, so keeping them would hand out state the database no longer has.
 pub fn Session::rollback(self : Session) -> Unit raise @moondb.DbError {
+  self.discard()
   self.driver.rollback()
 }
 
@@ -490,8 +526,10 @@ pub fn[T] Session::create_table(
 }
 
 ///|
-/// Insert a mapped `record` through its `model`, binding the model's `to_columns`
-/// pairs. Returns the affected-row count and new rowid.
+/// Insert a mapped `record` through its `model` **now**, binding the model's
+/// `to_columns` pairs. Returns the affected-row count and new rowid. Nothing is
+/// queued and the identity map is not consulted; `add_record` is the unit-of-work
+/// counterpart that defers to `flush`.
 pub fn[T] Session::insert_record(
   self : Session,
   model : Model[T],
@@ -662,8 +700,10 @@ pub fn[S, T] Session::load_one_batch(
 }
 
 ///|
-/// Close the session's underlying connection.
+/// Close the session's underlying connection, dropping anything still queued and
+/// every record the identity map holds.
 pub fn Session::close(self : Session) -> Unit {
+  self.discard()
   self.driver.close()
 }
 

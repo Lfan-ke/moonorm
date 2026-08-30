@@ -235,6 +235,12 @@ pub struct Model[T] {
   columns : Array[Column]
   from_row : (@moondb.Row) -> T raise @moondb.DbError
   to_columns : (T) -> Array[(String, Value)]
+  // A session's identity map has to hang off the descriptor that carries `T`.
+  // MoonBit has no downcast, so a `Session` cannot keep the records of several
+  // models in one container and get them back typed; the type-indexed store is the
+  // only place the type is still known. The outer key is the session's serial, so
+  // two sessions never hand out the same instance, and closing one drops its slot.
+  ident : Map[Int, Map[String, T]]
 }
 
 ///|
@@ -251,7 +257,7 @@ pub fn[T] Model::new(
   from_row : (@moondb.Row) -> T raise @moondb.DbError,
   to_columns : (T) -> Array[(String, Value)],
 ) -> Model[T] {
-  { table, columns, from_row, to_columns, }
+  { table, columns, from_row, to_columns, ident: Map([]), }
 }
 
 ///|
@@ -293,7 +299,7 @@ pub fn[T] Model::from_fields(
     }
     out
   }
-  { table, columns, from_row, to_columns, }
+  { table, columns, from_row, to_columns, ident: Map([]), }
 }
 
 ///|
@@ -304,6 +310,62 @@ pub fn[T] Model::column_names(self : Model[T]) -> Array[String] {
     names.push(c.name)
   }
   names
+}
+
+///|
+/// The declared primary-key column names, in declaration order. Empty when the model
+/// declares no key at all — the unit of work needs one to address a row, and
+/// `Session::get` / `Session::delete_record` say so rather than guessing.
+pub fn[T] Model::pk_columns(self : Model[T]) -> Array[String] {
+  let names : Array[String] = []
+  for c in self.columns {
+    if c.primary_key {
+      names.push(c.name)
+    }
+  }
+  names
+}
+
+///|
+/// A record's primary-key values in `pk_columns` order, read off the same
+/// `to_columns` projection an INSERT binds — the only route to them, since MoonBit
+/// cannot look up an attribute by name.
+///
+/// A projection that omits a key column — the usual shape for an autoincrement id
+/// the server assigns — stops the scan there, so the result is shorter than
+/// `pk_columns`. That length mismatch is how a session tells a record it can address
+/// from one whose key does not exist yet.
+pub fn[T] Model::pk_of(self : Model[T], record : T) -> Array[Value] {
+  let bound = (self.to_columns)(record)
+  let out : Array[Value] = []
+  for name in self.pk_columns() {
+    let mut found = false
+    for pair in bound {
+      if pair.0 == name {
+        out.push(pair.1)
+        found = true
+        break
+      }
+    }
+    if !found {
+      break
+    }
+  }
+  out
+}
+
+///|
+/// The distinct tables this model's foreign keys point at, itself excluded. A flush
+/// orders inserts so every table named here is written before this one, and deletes
+/// the other way round.
+pub fn[T] Model::parent_tables(self : Model[T]) -> Array[String] {
+  let out : Array[String] = []
+  for c in self.columns {
+    if c.references is Some((t, _)) && t != self.table && !out.contains(t) {
+      out.push(t)
+    }
+  }
+  out
 }
 
 ///|
